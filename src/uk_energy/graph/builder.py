@@ -202,9 +202,16 @@ class GridGraphBuilder:
 
     # ─── Substations from OSM ────────────────────────────────────────────────
 
-    def add_substations_from_osm(self) -> int:
-        """Add substation nodes from OSM data."""
+    def add_substations_from_osm(self, min_voltage_kv: float = 132.0) -> int:
+        """
+        Add substation nodes from OSM data.
+
+        Only includes substations at or above min_voltage_kv (default 132kV)
+        to filter out the ~190k distribution substations that aren't relevant
+        for transmission-level modelling.
+        """
         count = 0
+        skipped = 0
         osm_path = OSM_RAW / "substations.json"
         if not osm_path.exists():
             logger.info("No OSM substation data found")
@@ -224,13 +231,28 @@ class GridGraphBuilder:
 
                 tags = el.get("tags", {})
                 osm_id = str(el["id"])
-                name = tags.get("name", tags.get("ref", f"substation_{osm_id}"))
                 voltage_str = tags.get("voltage", "")
                 voltage_kv: float | None = None
                 try:
-                    voltage_kv = float(voltage_str.split(";")[0]) / 1000.0
+                    # voltage field can be semicolon-separated (e.g. "400000;132000")
+                    # Take the highest voltage
+                    voltages = [float(v.strip()) for v in voltage_str.split(";") if v.strip()]
+                    if voltages:
+                        voltage_kv = max(voltages) / 1000.0
                 except (ValueError, AttributeError):
                     pass
+
+                # Filter: only transmission-grade substations (≥132kV)
+                # Also include substations with named tags even if voltage is unknown
+                has_name = bool(tags.get("name"))
+                if voltage_kv is not None and voltage_kv < min_voltage_kv and not has_name:
+                    skipped += 1
+                    continue
+                if voltage_kv is None and not has_name:
+                    skipped += 1
+                    continue
+
+                name = tags.get("name", tags.get("ref", f"substation_{osm_id}"))
 
                 sub = Substation(
                     node_id=f"sub_{osm_id}",
@@ -244,7 +266,10 @@ class GridGraphBuilder:
                 self._add_node(f"sub_{osm_id}", sub.to_dict())
                 count += 1
 
-            logger.info(f"Added {count} substation nodes from OSM")
+            logger.info(
+                f"Added {count} transmission substations from OSM "
+                f"(filtered {skipped} below {min_voltage_kv}kV)"
+            )
         except Exception as exc:
             logger.warning(f"Failed to load OSM substations: {exc}")
 

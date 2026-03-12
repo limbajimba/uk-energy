@@ -230,22 +230,36 @@ def create_map(plants_df: pd.DataFrame | None = None) -> Path:
             osm_data = json.loads(osm_sub_path.read_text())
             sub_count = 0
             for el in osm_data.get("elements", []):
-                if el.get("type") == "node" and "lat" in el and "lon" in el:
-                    tags = el.get("tags", {})
-                    name = tags.get("name", tags.get("ref", f"Substation {el['id']}"))
-                    voltage = tags.get("voltage", "?")
-                    folium.CircleMarker(
-                        location=[el["lat"], el["lon"]],
-                        radius=3,
-                        color="#455A64",
-                        fill=True,
-                        fill_color="#78909C",
-                        fill_opacity=0.6,
-                        weight=1,
-                        tooltip=f"{name} ({voltage}V)",
-                    ).add_to(sub_group)
-                    sub_count += 1
-            logger.info(f"Added {sub_count} substations to map")
+                if el.get("type") != "node" or "lat" not in el or "lon" not in el:
+                    continue
+                tags = el.get("tags", {})
+                # Only include transmission-grade substations (≥132kV) or named ones
+                voltage_str = tags.get("voltage", "")
+                voltage_kv = 0.0
+                try:
+                    voltages = [float(v.strip()) for v in voltage_str.split(";") if v.strip()]
+                    if voltages:
+                        voltage_kv = max(voltages) / 1000.0
+                except (ValueError, AttributeError):
+                    pass
+                has_name = bool(tags.get("name"))
+                if voltage_kv < 132 and not has_name:
+                    continue
+
+                name = tags.get("name", tags.get("ref", f"Substation {el['id']}"))
+                voltage_display = f"{voltage_kv:.0f}kV" if voltage_kv > 0 else "?"
+                folium.CircleMarker(
+                    location=[el["lat"], el["lon"]],
+                    radius=3,
+                    color="#455A64",
+                    fill=True,
+                    fill_color="#78909C",
+                    fill_opacity=0.6,
+                    weight=1,
+                    tooltip=f"{name} ({voltage_display})",
+                ).add_to(sub_group)
+                sub_count += 1
+            logger.info(f"Added {sub_count} transmission substations to map")
         except Exception as exc:
             logger.warning(f"Could not add OSM substations to map: {exc}")
     sub_group.add_to(m)
