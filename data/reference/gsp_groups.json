@@ -1,0 +1,22 @@
+{
+  "description": "GB Grid Supply Point (GSP) group codes and names. These are the ~14 major GSP groups used in balancing mechanism settlement.",
+  "source": "Elexon / National Grid ESO",
+  "notes": "Individual GSPs (400+) connect at 132kV; GSP Groups aggregate them for settlement. The group code prefix is the first letter(s) of the GSOG ID.",
+  "gsp_groups": [
+    {"code": "_A", "name": "Eastern",              "approximate_region": "East England"},
+    {"code": "_B", "name": "East Midlands",        "approximate_region": "East Midlands"},
+    {"code": "_C", "name": "London",               "approximate_region": "London"},
+    {"code": "_D", "name": "Merseyside & N Wales", "approximate_region": "North Wales & Mersey"},
+    {"code": "_E", "name": "Midlands",             "approximate_region": "West Midlands"},
+    {"code": "_F", "name": "N Eastern",            "approximate_region": "North East England"},
+    {"code": "_G", "name": "N Western",            "approximate_region": "North West England"},
+    {"code": "_H", "name": "Southern",             "approximate_region": "South England"},
+    {"code": "_J", "name": "SE England",           "approximate_region": "South East England"},
+    {"code": "_K", "name": "SW England",           "approximate_region": "South West England"},
+    {"code": "_L", "name": "Yorkshire",            "approximate_region": "Yorkshire"},
+    {"code": "_M", "name": "S Scotland",           "approximate_region": "South Scotland"},
+    {"code": "_N", "name": "N Scotland",           "approximate_region": "North Scotland"},
+    {"code": "_P", "name": "S Wales",              "approximate_region": "South Wales"}
+  ],
+  "notes_on_usage": "GSP groups are used in the Balancing Mechanism to allocate generation and demand across settlement boundaries. Each group corresponds roughly to a DNO licence area."
+}

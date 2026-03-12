@@ -1,0 +1,318 @@
+{
+  "metadata": {
+    "description": "UK electrical interconnectors \u2014 all operational links",
+    "total_capacity_mw": 10300,
+    "count": 10,
+    "last_updated": "2026-03-12T23:23:03.969938+00:00"
+  },
+  "interconnectors": [
+    {
+      "id": "IFA",
+      "name": "IFA (Interconnexion France\u2013Angleterre)",
+      "countries": [
+        "GB",
+        "FR"
+      ],
+      "capacity_mw": 2000,
+      "type": "HVDC",
+      "cable_type": "subsea",
+      "status": "operational",
+      "commissioned_year": 1986,
+      "operators": [
+        "National Grid",
+        "RTE"
+      ],
+      "gb_terminal": {
+        "name": "Sellindge",
+        "location": "Kent, England",
+        "lat": 51.1005,
+        "lon": 0.9889
+      },
+      "foreign_terminal": {
+        "name": "Les Mandarins, Calais",
+        "location": "Pas-de-Calais, France",
+        "lat": 50.9213,
+        "lon": 1.8627
+      },
+      "length_km": 73,
+      "notes": "Oldest UK interconnector, runs under the English Channel"
+    },
+    {
+      "id": "IFA2",
+      "name": "IFA2",
+      "countries": [
+        "GB",
+        "FR"
+      ],
+      "capacity_mw": 1000,
+      "type": "HVDC",
+      "cable_type": "subsea",
+      "status": "operational",
+      "commissioned_year": 2021,
+      "operators": [
+        "National Grid",
+        "RTE"
+      ],
+      "gb_terminal": {
+        "name": "Chilling",
+        "location": "Fareham, Hampshire, England",
+        "lat": 50.8278,
+        "lon": -1.2722
+      },
+      "foreign_terminal": {
+        "name": "Tourbe, Caen",
+        "location": "Normandy, France",
+        "lat": 49.1829,
+        "lon": -0.3707
+      },
+      "length_km": 240,
+      "notes": "Second France-GB interconnector"
+    },
+    {
+      "id": "BritNed",
+      "name": "BritNed",
+      "countries": [
+        "GB",
+        "NL"
+      ],
+      "capacity_mw": 1000,
+      "type": "HVDC",
+      "cable_type": "subsea",
+      "status": "operational",
+      "commissioned_year": 2011,
+      "operators": [
+        "National Grid",
+        "TenneT"
+      ],
+      "gb_terminal": {
+        "name": "Isle of Grain",
+        "location": "Kent, England",
+        "lat": 51.4467,
+        "lon": 0.7178
+      },
+      "foreign_terminal": {
+        "name": "Maasvlakte",
+        "location": "Rotterdam, Netherlands",
+        "lat": 51.9503,
+        "lon": 4.0046
+      },
+      "length_km": 260,
+      "notes": "Connects GB to Netherlands"
+    },
+    {
+      "id": "NemoLink",
+      "name": "Nemo Link",
+      "countries": [
+        "GB",
+        "BE"
+      ],
+      "capacity_mw": 1000,
+      "type": "HVDC",
+      "cable_type": "subsea",
+      "status": "operational",
+      "commissioned_year": 2019,
+      "operators": [
+        "National Grid",
+        "Elia"
+      ],
+      "gb_terminal": {
+        "name": "Richborough",
+        "location": "Kent, England",
+        "lat": 51.3053,
+        "lon": 1.3509
+      },
+      "foreign_terminal": {
+        "name": "Herdersbrug, Bruges",
+        "location": "West Flanders, Belgium",
+        "lat": 51.2194,
+        "lon": 3.1975
+      },
+      "length_km": 140,
+      "notes": "First UK-Belgium interconnector"
+    },
+    {
+      "id": "NSL",
+      "name": "North Sea Link (NSL)",
+      "countries": [
+        "GB",
+        "NO"
+      ],
+      "capacity_mw": 1400,
+      "type": "HVDC",
+      "cable_type": "subsea",
+      "status": "operational",
+      "commissioned_year": 2021,
+      "operators": [
+        "National Grid",
+        "Statnett"
+      ],
+      "gb_terminal": {
+        "name": "Blyth",
+        "location": "Northumberland, England",
+        "lat": 55.1253,
+        "lon": -1.5094
+      },
+      "foreign_terminal": {
+        "name": "Kvilldal",
+        "location": "Rogaland, Norway",
+        "lat": 59.5853,
+        "lon": 6.5289
+      },
+      "length_km": 720,
+      "notes": "World's longest subsea power cable at commissioning"
+    },
+    {
+      "id": "Moyle",
+      "name": "Moyle Interconnector",
+      "countries": [
+        "GB",
+        "NIR"
+      ],
+      "capacity_mw": 500,
+      "type": "HVDC",
+      "cable_type": "subsea",
+      "status": "operational",
+      "commissioned_year": 2001,
+      "operators": [
+        "SONI",
+        "SP Manweb"
+      ],
+      "gb_terminal": {
+        "name": "Auchencrosh",
+        "location": "South Ayrshire, Scotland",
+        "lat": 55.1167,
+        "lon": -4.9667
+      },
+      "foreign_terminal": {
+        "name": "Ballycronan More",
+        "location": "Antrim, Northern Ireland",
+        "lat": 54.8667,
+        "lon": -5.7667
+      },
+      "length_km": 63,
+      "notes": "Connects GB to Northern Ireland"
+    },
+    {
+      "id": "EWIC",
+      "name": "East West Interconnector (EWIC)",
+      "countries": [
+        "GB",
+        "IE"
+      ],
+      "capacity_mw": 500,
+      "type": "HVDC",
+      "cable_type": "subsea",
+      "status": "operational",
+      "commissioned_year": 2012,
+      "operators": [
+        "National Grid",
+        "EirGrid"
+      ],
+      "gb_terminal": {
+        "name": "Shotton",
+        "location": "Flintshire, Wales",
+        "lat": 53.2127,
+        "lon": -3.0457
+      },
+      "foreign_terminal": {
+        "name": "Woodland",
+        "location": "County Meath, Ireland",
+        "lat": 53.5667,
+        "lon": -6.6833
+      },
+      "length_km": 261,
+      "notes": "Connects GB (Wales) to Republic of Ireland"
+    },
+    {
+      "id": "ElecLink",
+      "name": "ElecLink",
+      "countries": [
+        "GB",
+        "FR"
+      ],
+      "capacity_mw": 1000,
+      "type": "HVDC",
+      "cable_type": "tunnel",
+      "status": "operational",
+      "commissioned_year": 2022,
+      "operators": [
+        "ElecLink Ltd"
+      ],
+      "gb_terminal": {
+        "name": "Folkestone",
+        "location": "Kent, England",
+        "lat": 51.0775,
+        "lon": 1.1699
+      },
+      "foreign_terminal": {
+        "name": "Coquelles",
+        "location": "Pas-de-Calais, France",
+        "lat": 50.9289,
+        "lon": 1.8267
+      },
+      "length_km": 51,
+      "notes": "Runs through the Channel Tunnel (Eurotunnel)"
+    },
+    {
+      "id": "VikingLink",
+      "name": "Viking Link",
+      "countries": [
+        "GB",
+        "DK"
+      ],
+      "capacity_mw": 1400,
+      "type": "HVDC",
+      "cable_type": "subsea",
+      "status": "operational",
+      "commissioned_year": 2023,
+      "operators": [
+        "National Grid",
+        "Energinet"
+      ],
+      "gb_terminal": {
+        "name": "Bicker Fen",
+        "location": "Lincolnshire, England",
+        "lat": 52.9736,
+        "lon": -0.2281
+      },
+      "foreign_terminal": {
+        "name": "Revsing",
+        "location": "South Jutland, Denmark",
+        "lat": 55.3686,
+        "lon": 9.1514
+      },
+      "length_km": 765,
+      "notes": "World's longest subsea power cable, connects Lincolnshire to Denmark"
+    },
+    {
+      "id": "Greenlink",
+      "name": "Greenlink",
+      "countries": [
+        "GB",
+        "IE"
+      ],
+      "capacity_mw": 500,
+      "type": "HVDC",
+      "cable_type": "subsea",
+      "status": "operational",
+      "commissioned_year": 2024,
+      "operators": [
+        "Green Interconnection Group"
+      ],
+      "gb_terminal": {
+        "name": "Pembroke",
+        "location": "Pembrokeshire, Wales",
+        "lat": 51.6747,
+        "lon": -5.0211
+      },
+      "foreign_terminal": {
+        "name": "Great Island",
+        "location": "County Wexford, Ireland",
+        "lat": 52.3167,
+        "lon": -6.9167
+      },
+      "length_km": 190,
+      "notes": "Second Wales-Ireland interconnector"
+    }
+  ]
+}

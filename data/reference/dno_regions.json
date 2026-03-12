@@ -1,0 +1,132 @@
+{
+  "description": "14 DNO (Distribution Network Operator) regions in Great Britain as used by National Grid ESO / Carbon Intensity API",
+  "source": "Carbon Intensity API / National Grid ESO",
+  "regions": [
+    {
+      "id": 1,
+      "shortname": "N. Scotland",
+      "name": "North Scotland",
+      "dno_operator": "SSEN Transmission / SSEN Distribution",
+      "carbon_intensity_id": 1,
+      "centroid_lat": 57.5,
+      "centroid_lon": -4.0
+    },
+    {
+      "id": 2,
+      "shortname": "S. Scotland",
+      "name": "South Scotland",
+      "dno_operator": "SP Energy Networks",
+      "carbon_intensity_id": 2,
+      "centroid_lat": 55.8,
+      "centroid_lon": -3.5
+    },
+    {
+      "id": 3,
+      "shortname": "NW England",
+      "name": "North West England",
+      "dno_operator": "Electricity North West",
+      "carbon_intensity_id": 3,
+      "centroid_lat": 53.7,
+      "centroid_lon": -2.5
+    },
+    {
+      "id": 4,
+      "shortname": "NE England",
+      "name": "North East England",
+      "dno_operator": "Northern Powergrid",
+      "carbon_intensity_id": 4,
+      "centroid_lat": 54.8,
+      "centroid_lon": -1.5
+    },
+    {
+      "id": 5,
+      "shortname": "Yorkshire",
+      "name": "Yorkshire",
+      "dno_operator": "Northern Powergrid",
+      "carbon_intensity_id": 5,
+      "centroid_lat": 53.8,
+      "centroid_lon": -1.5
+    },
+    {
+      "id": 6,
+      "shortname": "N. Wales",
+      "name": "North Wales & Mersey",
+      "dno_operator": "SP Manweb",
+      "carbon_intensity_id": 6,
+      "centroid_lat": 53.1,
+      "centroid_lon": -3.0
+    },
+    {
+      "id": 7,
+      "shortname": "S. Wales",
+      "name": "South Wales",
+      "dno_operator": "Western Power Distribution / National Grid ED",
+      "carbon_intensity_id": 7,
+      "centroid_lat": 51.7,
+      "centroid_lon": -3.5
+    },
+    {
+      "id": 8,
+      "shortname": "W. Midlands",
+      "name": "West Midlands",
+      "dno_operator": "Western Power Distribution / National Grid ED",
+      "carbon_intensity_id": 8,
+      "centroid_lat": 52.5,
+      "centroid_lon": -2.0
+    },
+    {
+      "id": 9,
+      "shortname": "E. Midlands",
+      "name": "East Midlands",
+      "dno_operator": "Western Power Distribution / National Grid ED",
+      "carbon_intensity_id": 9,
+      "centroid_lat": 52.7,
+      "centroid_lon": -1.0
+    },
+    {
+      "id": 10,
+      "shortname": "E. England",
+      "name": "East England",
+      "dno_operator": "UK Power Networks",
+      "carbon_intensity_id": 10,
+      "centroid_lat": 52.5,
+      "centroid_lon": 0.5
+    },
+    {
+      "id": 11,
+      "shortname": "SW England",
+      "name": "South West England",
+      "dno_operator": "Western Power Distribution / National Grid ED",
+      "carbon_intensity_id": 11,
+      "centroid_lat": 51.0,
+      "centroid_lon": -3.5
+    },
+    {
+      "id": 12,
+      "shortname": "S. England",
+      "name": "South England",
+      "dno_operator": "Scottish and Southern Electricity Networks",
+      "carbon_intensity_id": 12,
+      "centroid_lat": 51.2,
+      "centroid_lon": -1.5
+    },
+    {
+      "id": 13,
+      "shortname": "London",
+      "name": "London",
+      "dno_operator": "UK Power Networks",
+      "carbon_intensity_id": 13,
+      "centroid_lat": 51.5,
+      "centroid_lon": -0.1
+    },
+    {
+      "id": 14,
+      "shortname": "SE England",
+      "name": "South East England",
+      "dno_operator": "UK Power Networks",
+      "carbon_intensity_id": 14,
+      "centroid_lat": 51.2,
+      "centroid_lon": 0.5
+    }
+  ]
+}
