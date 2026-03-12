@@ -33,22 +33,22 @@ Cross-referenced plants across all sources using:
 | Metric | Value |
 |---|---|
 | Total plants | 14,805 |
-| With coordinates | 2,882 |
+| With coordinates | 14,739 (99.5%) |
 | Total capacity | 419,036 MW |
 | Operational | 4,617 |
 | Sources | OSUKED (277), WRI (2,919), REPD (11,338), DUKES (825), BMRS (271) |
 
 ### 3. Network Graph (NetworkX DiGraph)
 
-**Nodes** (31,137 total):
+**Nodes** (29,941 total):
 - 14,805 generation plants
-- 16,272 transmission substations (≥132kV)
+- 16,272 transmission substations (≥132kV, filtered from 197k)
 - 20 interconnector terminals (10 links: FR, NL, BE, NO, DK, IE, NIR)
 - 6 Grid Supply Points
 - 14 demand zones (DNO regions)
 
-**Edges** (2,890 total):
-- 2,870 plant → GSP connections (nearest spatial match)
+**Edges** (14,930 total):
+- 14,910 plant → GSP connections (nearest spatial match, 99.5% coverage)
 - 20 interconnector cables (bidirectional, 10.3 GW total capacity)
 
 The graph is serialised to NetworkX pickle and can be exported to:
@@ -58,11 +58,11 @@ The graph is serialised to NetworkX pickle and can be exported to:
 
 ### 4. Interactive Visualisations
 
-#### **UK Energy Map** (16.6 MB HTML)
+#### **UK Energy Map** (38.4 MB HTML)
 `output/uk_energy_map.html`
 
 Features:
-- 2,882 generation plants colour-coded by fuel type
+- 14,739 generation plants colour-coded by fuel type
 - Log-scale marker size by capacity
 - 16,272 transmission substations (toggle layer)
 - 10 interconnector cables with capacity labels
@@ -76,7 +76,7 @@ Features:
 4. Wind offshore — 54,826 MW
 5. Gas CCGT — 22,081 MW
 
-#### **Network Diagram** (0.6 MB HTML)
+#### **Network Diagram** (3.4 MB HTML)
 `output/uk_grid_network.html`
 
 Two views:
@@ -285,7 +285,7 @@ open output/uk_grid_network.html       # network diagram
 
 3. **BMRS real-time data** — B1610 endpoint returned empty `{"data": []}` (settlement period may be in future). Need to query historical dates or use alternative endpoints.
 
-4. **Plant coordinates** — Only 2,882 of 14,805 plants have coordinates (19%). The rest are planning/consented projects without exact locations. DUKES has 1,369 with coordinates, REPD has 8,454 — full integration TBD.
+4. **Plant coordinates** — 14,739 of 14,805 plants have coordinates (99.5%). The 66 without coordinates are projects with missing or invalid location data. DUKES (1,368) and REPD (13,967) coordinates converted from OSGB36 (Ordnance Survey Grid) to WGS84 via pyproj.
 
 5. **Interconnector live flows** — BMRS INTERFUELHH endpoint exists but wasn't fully tested. Static reference data is accurate (10 links, 10.3 GW capacity).
 
