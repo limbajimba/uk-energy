@@ -377,12 +377,16 @@ class PlantMatcher:
             fuel_raw = row.get("fuel", row.get("fuel_type", row.get("Fuel", "")))
             cap_raw = row.get("capacity_mw", row.get("installed_capacity", row.get("Installed Capacity (MW)", np.nan)))
 
+            # DUKES processed CSV now has lat/lon (converted from OSGB36)
+            lat_val = row.get("lat", np.nan)
+            lon_val = row.get("lon", np.nan)
+
             plant: dict[str, Any] = {
                 "plant_id": _make_plant_id(name, "dukes"),
                 "osuked_id": None,
                 "name": name,
-                "lat": None,  # DUKES doesn't provide coordinates
-                "lon": None,
+                "lat": float(lat_val) if pd.notna(lat_val) else None,
+                "lon": float(lon_val) if pd.notna(lon_val) else None,
                 "fuel_type": _map_fuel_type(fuel_raw, self.fuel_mapping),
                 "technology": str(fuel_raw or "unknown"),
                 "capacity_mw": float(cap_raw) if pd.notna(cap_raw) else None,
@@ -430,8 +434,8 @@ class PlantMatcher:
 
             lat_raw = row.get("lat", row.get("latitude", np.nan))
             lon_raw = row.get("lon", row.get("longitude", np.nan))
-            lat = float(lat_raw or np.nan)
-            lon = float(lon_raw or np.nan)
+            lat = float(lat_raw) if pd.notna(lat_raw) else np.nan
+            lon = float(lon_raw) if pd.notna(lon_raw) else np.nan
 
             plant: dict[str, Any] = {
                 "plant_id": _make_plant_id(name, "repd"),

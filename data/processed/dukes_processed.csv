@@ -1,4 +1,4 @@
-company,name,technology,type,chp,fuel,secondary_fuel,capacity_mw,grid_connection,country,Region,Postcode,OS Reference,X-Coordinate,Y-Coordinate,Year Commissioned,DESNZ site code,lat,lon
+company,name,technology,type,CHP,fuel,Secondary Fuel,capacity_mw,Grid Connection Type,country,region,postcode,OS Reference,X-Coordinate,Y-Coordinate,year_commissioned,dukes_id,lat,lon
 Anesco,Puriton,Solar,PV,No,Solar,,4.56768,LV,England,South West,TA64TG,,332462.0,142273.0,2015.0,SOL-000443,51.17568739645036,-2.967511721804647
 Anesco,Bourne Park,Solar,PV,No,Solar,,0.2484,LV,England,South West,DT27TU,,372107.0,97577.0,2012.0,SOL-000481,50.777095250459965,-2.396971181638148
 Anesco,Owls Lodge,Solar,PV,No,Solar,,10.00465,LV,England,South East,SP116PL,,443869.0,142971.0,2013.0,SOL-000585,51.184291821240144,-1.3737213379447502
@@ -665,7 +665,7 @@ Lightsource BP,Arkwright SPV,Solar,PV,No,Solar,,4.99928,,England,East Midlands,S
 Lightsource BP,Firs Road CIC1,Solar,PV,No,Solar,,4.94208,,Wales,Wales,NP7 8SW,SO364152,336462.0,215214.0,2015.0,SOL-001560,51.831908515124034,-2.923464859260588
 Lightsource BP,Firs Road CIC2,Solar,PV,No,Solar,,4.55312,,Wales,Wales,NP7 8SW,SO364152,336462.0,215214.0,2015.0,SOL-001561,51.831908515124034,-2.923464859260588
 Lightsource BP,Hafod CIC,Solar,PV,No,Solar,,2.77932,,Wales,Wales,NP13 2ER,SO201036,320123.0,203663.0,2015.0,SOL-001562,51.725973541577794,-3.157866998296607
-Lightsource BP,Hafod SPV,Solar,PV,No,Solar,,4.95144,,Wales,Wales,NP13 2ER,SO201036,3201233.0,203663.0,2015.0,SOL-001563,45.64421803155853,34.16065088400781
+Lightsource BP,Hafod SPV,Solar,PV,No,Solar,,4.95144,,Wales,Wales,NP13 2ER,SO201036,3201233.0,203663.0,2015.0,SOL-001563,,
 Lightsource BP,Laceby CIC1,Solar,PV,No,Solar,,4.99994,,England,East Midlands,DN37 7LD,TA227047,522785.0,404749.0,2015.0,SOL-001564,53.52506809399815,-0.14928489507828724
 Lightsource BP,Laceby CIC2,Solar,PV,No,Solar,,4.998939999999999,,England,East Midlands,DN37 7LD,TA227047,522785.0,404749.0,2015.0,SOL-001565,53.52506809399815,-0.14928489507828724
 Lightsource BP,Llancadle,Solar,PV,No,Solar,,4.98732,,Wales,Wales,CF62 3AQ,ST0367968416,303679.0,168416.0,2015.0,SOL-001566,51.406561506467696,-3.3862038952297566
