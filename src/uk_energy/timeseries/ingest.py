@@ -125,6 +125,36 @@ def ingest_all(store: TimeSeriesStore | None = None) -> dict[str, int]:
     return results
 
 
+def backfill_market_depth(store: TimeSeriesStore | None = None, days: int = 14) -> int:
+    """Backfill market depth for the last N days."""
+    from uk_energy.timeseries.bmrs_live import fetch_market_depth
+
+    own_store = store is None
+    if own_store:
+        store = TimeSeriesStore()
+
+    total = 0
+    today = date.today()
+
+    for i in range(days):
+        d = today - timedelta(days=i)
+        try:
+            df = fetch_market_depth(d)
+            if not df.empty:
+                n = store.ingest_market_depth(df)
+                total += n
+                if n > 0:
+                    logger.info(f"Backfilled market depth {d}: {n} records")
+        except Exception as e:
+            logger.warning(f"Market depth backfill failed for {d}: {e}")
+
+    if own_store:
+        store.close()
+
+    logger.info(f"Market depth backfill complete: {total} new rows over {days} days")
+    return total
+
+
 def backfill_prices(store: TimeSeriesStore | None = None, days: int = 30) -> int:
     """Backfill system prices for the last N days."""
     own_store = store is None

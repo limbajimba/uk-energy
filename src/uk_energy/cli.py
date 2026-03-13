@@ -342,15 +342,19 @@ def ts_ingest(stats: bool) -> None:
 @cli.command("ts-backfill")
 @click.option("--days", default=30, type=int, help="Days to backfill")
 @click.option("--prices/--no-prices", default=True, help="Backfill system prices")
-def ts_backfill(days: int, prices: bool) -> None:
+@click.option("--market-depth/--no-market-depth", default=True, help="Backfill market depth")
+def ts_backfill(days: int, prices: bool, market_depth: bool) -> None:
     """Backfill historical data into DuckDB."""
     from uk_energy.timeseries.store import TimeSeriesStore
-    from uk_energy.timeseries.ingest import backfill_prices
+    from uk_energy.timeseries.ingest import backfill_prices, backfill_market_depth
 
     store = TimeSeriesStore()
     if prices:
         n = backfill_prices(store, days=days)
         click.echo(f"  Backfilled {n} price records over {days} days")
+    if market_depth:
+        n = backfill_market_depth(store, days=min(days, 14))
+        click.echo(f"  Backfilled {n} market depth records")
     store.close()
 
 

@@ -828,21 +828,30 @@ def _gen_availability_table(hist: HistoricalData, static: StaticData) -> html.Di
 
     rows = []
     for fuel, avail_mw in sorted(latest.items(), key=lambda x: -x[1]):
-        if fuel.startswith("ic_"):
+        if fuel.startswith("ic_") or fuel == "coal":
             continue
         display = fuel_display.get(fuel, fuel)
         inst_fuels = FUEL_INSTALLED_MAP.get(fuel, [fuel])
         inst = sum(installed.get(f, 0) for f in inst_fuels)
-        pct = (avail_mw / inst * 100) if inst > 0 else 0
-        outage = max(0, inst - avail_mw)
+        # OCGT and Other: DUKES doesn't split OCGT from CCGT.
+        # Show available MW but mark installed as "—" to avoid misleading zeros.
+        if inst == 0 and avail_mw > 0:
+            pct = 0
+            outage = 0
+        else:
+            pct = (avail_mw / inst * 100) if inst > 0 else 0
+            outage = max(0, inst - avail_mw)
 
-        colour = "#4CAF50" if pct > 80 else "#FFC107" if pct > 50 else "#F44336"
+        colour = "#4CAF50" if pct > 80 else "#FFC107" if pct > 50 else "#F44336" if pct > 0 else "#555"
+        inst_str = f"{inst / 1000:.1f}" if inst > 0 else "—"
+        outage_str = f"{outage / 1000:.1f}" if inst > 0 else "—"
+        pct_str = f"{pct:.0f}%" if inst > 0 else "—"
         rows.append(html.Tr([
             html.Td(display, style={"padding": "2px 4px", "fontSize": "9px"}),
-            html.Td(f"{inst / 1000:.1f}", style={"textAlign": "right", "color": "#666", "padding": "2px 4px"}),
+            html.Td(inst_str, style={"textAlign": "right", "color": "#666", "padding": "2px 4px"}),
             html.Td(f"{avail_mw / 1000:.1f}", style={"textAlign": "right", "padding": "2px 4px"}),
-            html.Td(f"{outage / 1000:.1f}", style={"textAlign": "right", "color": "#F44336" if outage > 100 else "#555", "padding": "2px 4px"}),
-            html.Td(f"{pct:.0f}%", style={"textAlign": "right", "color": colour, "padding": "2px 4px"}),
+            html.Td(outage_str, style={"textAlign": "right", "color": "#F44336" if outage > 100 else "#555", "padding": "2px 4px"}),
+            html.Td(pct_str, style={"textAlign": "right", "color": colour, "padding": "2px 4px"}),
         ], style={"lineHeight": "16px"}))
 
     return html.Div([
