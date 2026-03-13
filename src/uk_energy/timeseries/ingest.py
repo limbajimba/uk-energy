@@ -70,7 +70,25 @@ def ingest_all(store: TimeSeriesStore | None = None) -> dict[str, int]:
     except Exception as e:
         logger.error(f"fetch_all failed: {e}")
 
-    # 2. Demand forecast
+    # 2. Market depth
+    try:
+        from uk_energy.timeseries.bmrs_live import fetch_market_depth
+        md = fetch_market_depth(today)
+        results["market_depth"] = store.ingest_market_depth(md)
+    except Exception as e:
+        logger.error(f"Market depth failed: {e}")
+        results["market_depth"] = 0
+
+    # 3. Wind forecast
+    try:
+        from uk_energy.timeseries.bmrs_live import fetch_wind_forecast
+        wf = fetch_wind_forecast()
+        results["wind_forecast"] = store.ingest_wind_forecast(wf)
+    except Exception as e:
+        logger.error(f"Wind forecast failed: {e}")
+        results["wind_forecast"] = 0
+
+    # 4. Demand forecast
     try:
         results["demand_forecast"] = _ingest_demand_forecast(store)
     except Exception as e:
@@ -133,6 +151,10 @@ def backfill_prices(store: TimeSeriesStore | None = None, days: int = 30) -> int
                     "ssp_gbp_mwh": rec.get("systemSellPrice", 0),
                     "sbp_gbp_mwh": rec.get("systemBuyPrice", 0),
                     "niv_mw": rec.get("netImbalanceVolume", 0),
+                    "reserve_scarcity_price": rec.get("reserveScarcityPrice", 0),
+                    "accepted_offer_vol": rec.get("totalAcceptedOfferVolume", 0),
+                    "accepted_bid_vol": rec.get("totalAcceptedBidVolume", 0),
+                    "price_derivation_code": rec.get("priceDerivationCode"),
                 })
 
             df = pd.DataFrame(rows)

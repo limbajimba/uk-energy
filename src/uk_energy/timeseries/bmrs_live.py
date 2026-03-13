@@ -220,6 +220,10 @@ def fetch_system_prices(
                     "ssp_gbp_mwh": rec.get("systemSellPrice", 0),
                     "sbp_gbp_mwh": rec.get("systemBuyPrice", 0),
                     "niv_mw": rec.get("netImbalanceVolume", 0),
+                    "reserve_scarcity_price": rec.get("reserveScarcityPrice", 0),
+                    "accepted_offer_vol": rec.get("totalAcceptedOfferVolume", 0),
+                    "accepted_bid_vol": rec.get("totalAcceptedBidVolume", 0),
+                    "price_derivation_code": rec.get("priceDerivationCode"),
                 })
         except httpx.HTTPStatusError:
             logger.warning(f"No system prices for {d}")
@@ -228,6 +232,73 @@ def fetch_system_prices(
     if not df.empty:
         df = df.sort_values("timestamp").drop_duplicates(subset=["timestamp"])
     logger.info(f"Fetched system prices: {len(df)} records")
+    return df
+
+
+# ─── Market depth ────────────────────────────────────────────────────────────
+
+def fetch_market_depth(
+    settlement_date: date | None = None,
+) -> pd.DataFrame:
+    """
+    Fetch market depth (offer/bid volumes, indicated imbalance) per settlement period.
+
+    Shows how much generation was offered vs demanded in the balancing mechanism.
+    High indicated_imbalance = system stress.
+    """
+    target = settlement_date or date.today()
+    yesterday = target - timedelta(days=1)
+
+    all_rows = []
+    for d in [yesterday, target]:
+        try:
+            data = _get(f"/balancing/settlement/market-depth/{d.isoformat()}")
+            records = data if isinstance(data, list) else data.get("data", [])
+            for rec in records:
+                all_rows.append({
+                    "timestamp": pd.Timestamp(f"{rec.get('settlementDate')}T{(rec.get('settlementPeriod', 1) - 1) * 30 // 60:02d}:{(rec.get('settlementPeriod', 1) - 1) * 30 % 60:02d}:00", tz="Europe/London"),
+                    "settlement_period": rec.get("settlementPeriod"),
+                    "settlement_date": rec.get("settlementDate"),
+                    "indicated_imbalance": rec.get("indicatedImbalance", 0),
+                    "offer_volume": rec.get("offerVolume", 0),
+                    "bid_volume": rec.get("bidVolume", 0),
+                    "accepted_offer_vol": rec.get("totalAcceptedOfferVolume", 0),
+                    "accepted_bid_vol": rec.get("totalAcceptedBidVolume", 0),
+                })
+        except httpx.HTTPStatusError:
+            pass
+
+    df = pd.DataFrame(all_rows)
+    if not df.empty:
+        df = df.sort_values("timestamp").drop_duplicates(subset=["timestamp"])
+    logger.info(f"Fetched market depth: {len(df)} records")
+    return df
+
+
+# ─── Wind generation forecast ───────────────────────────────────────────────
+
+def fetch_wind_forecast() -> pd.DataFrame:
+    """
+    Fetch BMRS wind generation forecast (WINDFOR dataset).
+
+    National Grid ESO's wind generation forecast, updated multiple times daily.
+    Crucial for predicting system balance and price direction.
+    """
+    data = _get("/datasets/WINDFOR")
+    records = data if isinstance(data, list) else data.get("data", [])
+
+    rows = []
+    for rec in records:
+        rows.append({
+            "timestamp": pd.Timestamp(rec.get("startTime")),
+            "publish_time": pd.Timestamp(rec.get("publishTime")),
+            "generation_mw": rec.get("generation", 0),
+        })
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values("timestamp").drop_duplicates(subset=["timestamp"])
+    logger.info(f"Fetched wind forecast: {len(df)} records")
     return df
 
 

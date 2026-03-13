@@ -55,7 +55,28 @@ CREATE TABLE IF NOT EXISTS system_prices (
     settlement_date VARCHAR,
     ssp_gbp_mwh   DOUBLE,
     sbp_gbp_mwh   DOUBLE,
-    niv_mw         DOUBLE
+    niv_mw         DOUBLE,
+    reserve_scarcity_price DOUBLE,
+    accepted_offer_vol DOUBLE,
+    accepted_bid_vol   DOUBLE,
+    price_derivation_code VARCHAR
+);
+
+CREATE TABLE IF NOT EXISTS market_depth (
+    timestamp     TIMESTAMPTZ NOT NULL PRIMARY KEY,
+    settlement_period INTEGER,
+    settlement_date VARCHAR,
+    indicated_imbalance DOUBLE,
+    offer_volume   DOUBLE,
+    bid_volume     DOUBLE,
+    accepted_offer_vol DOUBLE,
+    accepted_bid_vol   DOUBLE
+);
+
+CREATE TABLE IF NOT EXISTS wind_forecast (
+    timestamp     TIMESTAMPTZ NOT NULL PRIMARY KEY,
+    publish_time  TIMESTAMPTZ,
+    generation_mw DOUBLE
 );
 
 CREATE TABLE IF NOT EXISTS ic_flows (
@@ -196,18 +217,55 @@ class TimeSeriesStore:
         return inserted
 
     def ingest_system_prices(self, df: pd.DataFrame) -> int:
-        """Ingest system prices. Expects: timestamp, settlement_period, settlement_date, ssp_gbp_mwh, sbp_gbp_mwh, niv_mw."""
+        """Ingest system prices (SSP/SBP + balancing volumes)."""
         if df.empty:
             return 0
+        # Ensure optional columns exist
+        for col in ["reserve_scarcity_price", "accepted_offer_vol", "accepted_bid_vol", "price_derivation_code"]:
+            if col not in df.columns:
+                df[col] = None
         before = self._count("system_prices")
         self._con.execute("""
             INSERT OR IGNORE INTO system_prices
-                (timestamp, settlement_period, settlement_date, ssp_gbp_mwh, sbp_gbp_mwh, niv_mw)
-            SELECT timestamp, settlement_period, settlement_date, ssp_gbp_mwh, sbp_gbp_mwh, niv_mw
+                (timestamp, settlement_period, settlement_date, ssp_gbp_mwh, sbp_gbp_mwh,
+                 niv_mw, reserve_scarcity_price, accepted_offer_vol, accepted_bid_vol, price_derivation_code)
+            SELECT timestamp, settlement_period, settlement_date, ssp_gbp_mwh, sbp_gbp_mwh,
+                   niv_mw, reserve_scarcity_price, accepted_offer_vol, accepted_bid_vol, price_derivation_code
             FROM df
         """)
         inserted = self._count("system_prices") - before
         self._log_ingestion("system_prices", inserted, len(df) - inserted, df["timestamp"], "bmrs")
+        return inserted
+
+    def ingest_market_depth(self, df: pd.DataFrame) -> int:
+        """Ingest market depth (offer/bid volumes, indicated imbalance)."""
+        if df.empty:
+            return 0
+        before = self._count("market_depth")
+        self._con.execute("""
+            INSERT OR IGNORE INTO market_depth
+                (timestamp, settlement_period, settlement_date, indicated_imbalance,
+                 offer_volume, bid_volume, accepted_offer_vol, accepted_bid_vol)
+            SELECT timestamp, settlement_period, settlement_date, indicated_imbalance,
+                   offer_volume, bid_volume, accepted_offer_vol, accepted_bid_vol
+            FROM df
+        """)
+        inserted = self._count("market_depth") - before
+        self._log_ingestion("market_depth", inserted, len(df) - inserted, df["timestamp"], "bmrs")
+        return inserted
+
+    def ingest_wind_forecast(self, df: pd.DataFrame) -> int:
+        """Ingest wind generation forecast."""
+        if df.empty:
+            return 0
+        before = self._count("wind_forecast")
+        self._con.execute("""
+            INSERT OR IGNORE INTO wind_forecast (timestamp, publish_time, generation_mw)
+            SELECT timestamp, publish_time, generation_mw
+            FROM df
+        """)
+        inserted = self._count("wind_forecast") - before
+        self._log_ingestion("wind_forecast", inserted, len(df) - inserted, df["timestamp"], "bmrs")
         return inserted
 
     def ingest_ic_flows(self, df: pd.DataFrame) -> int:
@@ -372,9 +430,9 @@ class TimeSeriesStore:
 
     def table_stats(self) -> pd.DataFrame:
         """Get row counts and time ranges for all tables."""
-        tables = ["generation", "demand", "system_prices", "ic_flows",
-                   "demand_forecast", "gen_availability", "frequency", "carbon_intensity",
-                   "weather", "weather_index"]
+        tables = ["generation", "demand", "system_prices", "market_depth", "ic_flows",
+                   "demand_forecast", "wind_forecast", "gen_availability", "frequency",
+                   "carbon_intensity", "weather", "weather_index"]
         rows = []
         for t in tables:
             try:
