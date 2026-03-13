@@ -111,6 +111,19 @@ def _assign_dno_bbox(lat: float | None, lon: float | None) -> str | None:
             matches.append(region)
 
     if not matches:
+        # For offshore/NI: find nearest region by centre distance
+        if lat is not None and lon is not None:
+            # Northern Ireland
+            if 54.0 <= lat <= 55.5 and -8.5 <= lon <= -5.0:
+                return "Northern Ireland"
+
+            # Offshore: assign nearest coastal region
+            def dist_to_centre(r: dict) -> float:
+                clat = (r["lat_min"] + r["lat_max"]) / 2
+                clon = (r["lon_min"] + r["lon_max"]) / 2
+                return ((lat - clat) ** 2 + (lon - clon) ** 2)
+
+            return min(DNO_BBOX_APPROX, key=dist_to_centre)["name"]
         return None
     # Return the most specific (smallest area) match
     def area(r: dict) -> float:
@@ -138,14 +151,13 @@ def assign_dno_regions(df: pd.DataFrame) -> pd.DataFrame:
     except ImportError:
         logger.warning("geopandas not available — using bounding box approximation")
 
-    # Bbox fallback
-    if "dno_region" not in df.columns or df["dno_region"].isna().all():
-        df["dno_region"] = df.apply(
-            lambda row: _assign_dno_bbox(row.get("lat"), row.get("lon")),
-            axis=1,
-        )
-        assigned = df["dno_region"].notna().sum()
-        logger.info(f"Assigned DNO regions (bbox): {assigned}/{len(df)} plants")
+    # Always assign from bounding boxes (standardised region names)
+    df["dno_region"] = df.apply(
+        lambda row: _assign_dno_bbox(row.get("lat"), row.get("lon")),
+        axis=1,
+    )
+    assigned = df["dno_region"].notna().sum()
+    logger.info(f"Assigned DNO regions (bbox): {assigned}/{len(df)} plants")
 
     return df
 

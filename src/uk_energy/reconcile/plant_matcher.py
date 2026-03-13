@@ -50,9 +50,22 @@ PUMPED_STORAGE_STATIONS: set[str] = {
     "dinorwig", "ffestiniog", "cruachan", "foyers",
 }
 
-# WRI duplicates (same station appears twice)
-WRI_KNOWN_DUPES: dict[str, str] = {
-    # gppd_idnr of the duplicate → keep this one
+# Coordinate overrides for stations with known bad OSGB36→WGS84 conversions
+COORD_OVERRIDES: dict[str, tuple[float, float]] = {
+    "torness": (55.970, -2.398),  # DUKES OSGB36 coords are wrong
+}
+
+# Known UK offshore wind farms (Crown Estate leases)
+# DUKES labels all wind as just "Wind" — we use this to correct classification
+KNOWN_OFFSHORE_WIND: set[str] = {
+    "hornsea", "dogger bank", "seagreen", "east anglia", "london array",
+    "walney", "greater gabbard", "rampion", "robin rigg", "gunfleet",
+    "thanet", "dudgeon", "race bank", "sheringham", "lincs",
+    "lynn", "inner dowsing", "kentish flats", "burbo", "west of duddon",
+    "barrow offshore", "ormonde", "gwynt y mor", "rhyl flats", "north hoyle",
+    "beatrice", "moray", "triton knoll", "sofia", "teesside offshore",
+    "humber gateway", "westermost rough", "nng", "neart na gaoithe",
+    "scroby sands", "blyth offshore", "hywind", "galloper",
 }
 
 
@@ -253,9 +266,23 @@ def reconcile_plants() -> pd.DataFrame:
             if any(ps in name_lower for ps in PUMPED_STORAGE_STATIONS):
                 fuel_type = "hydro_pumped_storage"
 
+            # Classify offshore wind (DUKES just says "Wind" for all)
+            if fuel_type in ("wind_onshore", "wind_offshore"):
+                is_offshore = (
+                    any(kw in name_lower for kw in KNOWN_OFFSHORE_WIND)
+                    or "offshore" in name_lower
+                )
+                fuel_type = "wind_offshore" if is_offshore else "wind_onshore"
+
             lat = float(row["lat"]) if pd.notna(row.get("lat")) else None
             lon = float(row["lon"]) if pd.notna(row.get("lon")) else None
             cap = float(row["capacity_mw"]) if pd.notna(row.get("capacity_mw")) else None
+
+            # Apply coordinate overrides for known bad OSGB36 conversions
+            for key, (olat, olon) in COORD_OVERRIDES.items():
+                if key in name_lower:
+                    lat, lon = olat, olon
+                    break
 
             plant = {
                 "plant_id": _make_plant_id(name, "dukes"),
@@ -277,7 +304,7 @@ def reconcile_plants() -> pd.DataFrame:
                     else None
                 ),
                 "gsp_group": None,
-                "dno_region": str(row.get("region", "")) or None,
+                "dno_region": None,  # assigned by geocoder from coordinates
                 "source_dukes": True,
                 "source_wri": False,
                 "source_repd": False,
