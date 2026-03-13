@@ -75,6 +75,68 @@ class LiveData:
     carbon_gco2: float = 0.0
 
 
+@dataclass
+class HistoricalData:
+    """Historical data from DuckDB store."""
+    prices: pd.DataFrame  # 30d SSP/SBP
+    market_depth: pd.DataFrame
+    wind_forecast: pd.DataFrame
+    demand_forecast: pd.DataFrame
+    gen_availability: pd.DataFrame
+    weather_index: pd.DataFrame
+    frequency_stats: dict = field(default_factory=dict)
+    store_stats: pd.DataFrame = field(default_factory=pd.DataFrame)
+
+
+def load_historical() -> HistoricalData:
+    """Load historical data from DuckDB. Non-cached (fresh each call)."""
+    from uk_energy.timeseries.store import TimeSeriesStore, DB_PATH
+
+    if not DB_PATH.exists():
+        return HistoricalData(
+            prices=pd.DataFrame(), market_depth=pd.DataFrame(),
+            wind_forecast=pd.DataFrame(), demand_forecast=pd.DataFrame(),
+            gen_availability=pd.DataFrame(), weather_index=pd.DataFrame(),
+        )
+
+    store = TimeSeriesStore()
+    try:
+        prices = store.query("SELECT * FROM system_prices ORDER BY timestamp")
+        md = store.query("SELECT * FROM market_depth ORDER BY timestamp")
+        wf = store.query("SELECT * FROM wind_forecast ORDER BY timestamp")
+        df_fc = store.query("SELECT * FROM demand_forecast ORDER BY forecast_timestamp")
+        ga = store.query("SELECT * FROM gen_availability ORDER BY forecast_date, fuel_type")
+        wi = store.query("SELECT * FROM weather_index ORDER BY timestamp")
+        stats = store.table_stats()
+
+        # Frequency summary
+        freq_stats = {}
+        try:
+            r = store.query("""
+                SELECT ROUND(AVG(frequency_hz), 4) as mean,
+                       ROUND(MIN(frequency_hz), 4) as min_f,
+                       ROUND(MAX(frequency_hz), 4) as max_f,
+                       ROUND(STDDEV(frequency_hz), 4) as stddev,
+                       COUNT(*) as total,
+                       COUNT(*) FILTER (WHERE frequency_hz < 49.8) as below_49_8,
+                       COUNT(*) FILTER (WHERE frequency_hz > 50.2) as above_50_2
+                FROM frequency
+            """)
+            if not r.empty:
+                freq_stats = r.iloc[0].to_dict()
+        except Exception:
+            pass
+
+        return HistoricalData(
+            prices=prices, market_depth=md, wind_forecast=wf,
+            demand_forecast=df_fc, gen_availability=ga,
+            weather_index=wi, frequency_stats=freq_stats,
+            store_stats=stats,
+        )
+    finally:
+        store.close()
+
+
 def _inventory_sources() -> list[dict]:
     """Check what data files exist and their freshness."""
     sources = []

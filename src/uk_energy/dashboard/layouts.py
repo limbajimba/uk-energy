@@ -1,10 +1,7 @@
 """
 layouts.py — Dashboard tab layouts.
 
-Three tabs:
-  1. Live System: generation stack, demand, system prices, IC flows, utilisation, regional
-  2. Asset Map: Plotly Mapbox scatter of DUKES-verified operational plants
-  3. Data Sources: ingestion inventory, live feed inventory, data limitations
+Five tabs: Live | Prices & Balancing | Forecasts | Asset Map | Data
 """
 
 from __future__ import annotations
@@ -15,7 +12,7 @@ from dash import dcc, html
 import pandas as pd
 import numpy as np
 
-from uk_energy.dashboard.data import StaticData, LiveData
+from uk_energy.dashboard.data import StaticData, LiveData, HistoricalData
 from uk_energy.dashboard.theme import FUEL_COLOURS, FUEL_LABELS
 from uk_energy.timeseries.bmrs_live import IC_CAPACITY
 
@@ -440,7 +437,7 @@ def build_map_tab(static: StaticData) -> html.Div:
 # TAB 3: DATA SOURCES
 # ═════════════════════════════════════════════════════════════════════════════
 
-def build_sources_tab(static: StaticData) -> html.Div:
+def build_data_tab(static: StaticData) -> html.Div:
     rows = []
     for src in static.sources:
         status = src["status"]
@@ -544,3 +541,443 @@ def build_sources_tab(static: StaticData) -> html.Div:
             ),
         ]),
     ])
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TAB: PRICES & BALANCING
+# ═════════════════════════════════════════════════════════════════════════════
+
+def build_prices_tab(live: LiveData, hist: HistoricalData) -> html.Div:
+    return html.Div([
+        dbc.Row([
+            dbc.Col(_panel([_ssp_history(hist)]), width=8),
+            dbc.Col(_panel([_price_distribution(hist)]), width=4),
+        ], className="mb-2 g-2"),
+        dbc.Row([
+            dbc.Col(_panel([_niv_chart(hist)]), width=6),
+            dbc.Col(_panel([_market_depth_chart(hist)]), width=6),
+        ], className="mb-2 g-2"),
+        dbc.Row([
+            dbc.Col(_panel([_price_by_hour(hist)]), width=6),
+            dbc.Col(_panel([_price_stats_table(hist)]), width=6),
+        ], className="g-2"),
+    ])
+
+
+def _ssp_history(hist: HistoricalData) -> dcc.Graph:
+    """30-day SSP/SBP time series."""
+    p = hist.prices
+    if p.empty:
+        return dcc.Graph(figure=go.Figure().add_annotation(
+            text="No price data — run 'python -m uk_energy ts-backfill'",
+            xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+            font=dict(color="#666", size=11),
+        ).update_layout(**_chart_layout("", 320)), config={"displayModeBar": False})
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=p["timestamp"], y=p["ssp_gbp_mwh"], name="SSP",
+        line=dict(color="#FFC107", width=1),
+        hovertemplate="SSP: £%{y:.2f}<extra></extra>",
+    ))
+    # SBP only when different
+    diff = (p["sbp_gbp_mwh"] - p["ssp_gbp_mwh"]).abs()
+    if diff.max() > 0.5:
+        fig.add_trace(go.Scatter(
+            x=p["timestamp"], y=p["sbp_gbp_mwh"], name="SBP",
+            line=dict(color="#FF9800", width=0.5, dash="dot"),
+            hovertemplate="SBP: £%{y:.2f}<extra></extra>",
+        ))
+    fig.add_hline(y=0, line_color="#444")
+    fig.update_layout(**_chart_layout("SYSTEM PRICES — SSP/SBP (30d, imbalance settlement)", 320))
+    fig.update_yaxes(title_text="£/MWh")
+    return dcc.Graph(figure=fig, config={"displayModeBar": False})
+
+
+def _price_distribution(hist: HistoricalData) -> dcc.Graph:
+    """SSP histogram."""
+    p = hist.prices
+    if p.empty:
+        return dcc.Graph(figure=go.Figure(), style={"height": "320px"})
+
+    fig = go.Figure(go.Histogram(
+        x=p["ssp_gbp_mwh"], nbinsx=50, marker_color="#FFC107", opacity=0.8,
+        hovertemplate="£%{x:.0f}: %{y} periods<extra></extra>",
+    ))
+    # Mark current price
+    if not p.empty:
+        latest = p.iloc[-1]["ssp_gbp_mwh"]
+        fig.add_vline(x=latest, line_color="#F44336", line_width=2,
+                      annotation_text=f"Now £{latest:.0f}", annotation_font_color="#F44336")
+    fig.update_layout(**_chart_layout("SSP DISTRIBUTION (30d)", 320))
+    fig.update_xaxes(title_text="£/MWh")
+    fig.update_yaxes(title_text="Settlement periods")
+    return dcc.Graph(figure=fig, config={"displayModeBar": False})
+
+
+def _niv_chart(hist: HistoricalData) -> dcc.Graph:
+    """Net Imbalance Volume — system long/short indicator."""
+    p = hist.prices
+    if p.empty or "niv_mw" not in p.columns:
+        return dcc.Graph(figure=go.Figure(), style={"height": "260px"})
+
+    colours = ["#4CAF50" if v > 0 else "#F44336" for v in p["niv_mw"]]
+
+    fig = go.Figure(go.Bar(
+        x=p["timestamp"], y=p["niv_mw"], marker_color=colours,
+        hovertemplate="%{x}<br>NIV: %{y:+,.0f} MW<extra></extra>",
+    ))
+    fig.add_hline(y=0, line_color="#666")
+    fig.update_layout(**_chart_layout("NET IMBALANCE VOLUME — green=long, red=short (30d)", 260))
+    fig.update_layout(showlegend=False)
+    fig.update_yaxes(title_text="MW")
+    return dcc.Graph(figure=fig, config={"displayModeBar": False})
+
+
+def _market_depth_chart(hist: HistoricalData) -> dcc.Graph:
+    """Market depth — offer/bid volumes and indicated imbalance."""
+    md = hist.market_depth
+    if md.empty:
+        return dcc.Graph(figure=go.Figure().add_annotation(
+            text="No market depth data", xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False, font=dict(color="#666"),
+        ).update_layout(**_chart_layout("", 260)), config={"displayModeBar": False})
+
+    fig = go.Figure()
+    if "offer_volume" in md.columns:
+        fig.add_trace(go.Bar(
+            x=md["timestamp"], y=md["offer_volume"], name="Offers",
+            marker_color="rgba(76,175,80,0.5)",
+            hovertemplate="Offers: %{y:,.0f} MW<extra></extra>",
+        ))
+    if "bid_volume" in md.columns:
+        fig.add_trace(go.Bar(
+            x=md["timestamp"], y=-md["bid_volume"].abs(), name="Bids",
+            marker_color="rgba(244,67,54,0.5)",
+            hovertemplate="Bids: %{y:,.0f} MW<extra></extra>",
+        ))
+    if "indicated_imbalance" in md.columns:
+        fig.add_trace(go.Scatter(
+            x=md["timestamp"], y=md["indicated_imbalance"], name="Indicated Imbalance",
+            line=dict(color="#FFC107", width=1.5),
+            hovertemplate="Imbalance: %{y:+,.0f} MW<extra></extra>",
+        ))
+    fig.update_layout(**_chart_layout("MARKET DEPTH — offers/bids/imbalance (MW)", 260))
+    fig.update_layout(barmode="overlay")
+    return dcc.Graph(figure=fig, config={"displayModeBar": False})
+
+
+def _price_by_hour(hist: HistoricalData) -> dcc.Graph:
+    """Average SSP by hour of day — the daily price shape."""
+    p = hist.prices
+    if p.empty:
+        return dcc.Graph(figure=go.Figure(), style={"height": "280px"})
+
+    p = p.copy()
+    p["hour"] = p["timestamp"].dt.hour
+    hourly = p.groupby("hour").agg(
+        mean=("ssp_gbp_mwh", "mean"),
+        p25=("ssp_gbp_mwh", lambda x: x.quantile(0.25)),
+        p75=("ssp_gbp_mwh", lambda x: x.quantile(0.75)),
+    ).reset_index()
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=hourly["hour"], y=hourly["p75"], name="P75",
+        line=dict(width=0), showlegend=False,
+    ))
+    fig.add_trace(go.Scatter(
+        x=hourly["hour"], y=hourly["p25"], name="P25-P75",
+        line=dict(width=0), fill="tonexty", fillcolor="rgba(255,193,7,0.15)",
+    ))
+    fig.add_trace(go.Scatter(
+        x=hourly["hour"], y=hourly["mean"], name="Mean SSP",
+        line=dict(color="#FFC107", width=2),
+        hovertemplate="Hour %{x}: £%{y:.1f}/MWh<extra></extra>",
+    ))
+    fig.update_layout(**_chart_layout("SSP BY HOUR OF DAY — mean + P25/P75 band (30d)", 280))
+    fig.update_xaxes(title_text="Hour (UTC)", dtick=3)
+    fig.update_yaxes(title_text="£/MWh")
+    return dcc.Graph(figure=fig, config={"displayModeBar": False})
+
+
+def _price_stats_table(hist: HistoricalData) -> html.Div:
+    """Key price statistics."""
+    p = hist.prices
+    if p.empty:
+        return html.Div("No price data", style={"color": "#555"})
+
+    ssp = p["ssp_gbp_mwh"]
+    niv = p.get("niv_mw", pd.Series(dtype=float))
+
+    stats = [
+        ("Mean SSP", f"£{ssp.mean():.2f}/MWh"),
+        ("Median SSP", f"£{ssp.median():.2f}/MWh"),
+        ("StdDev", f"£{ssp.std():.2f}"),
+        ("Min", f"£{ssp.min():.2f}"),
+        ("Max", f"£{ssp.max():.2f}"),
+        ("P10", f"£{ssp.quantile(0.1):.2f}"),
+        ("P90", f"£{ssp.quantile(0.9):.2f}"),
+        ("Negative periods", f"{(ssp < 0).sum()} ({(ssp < 0).mean() * 100:.1f}%)"),
+        ("Spike >£150", f"{(ssp > 150).sum()} ({(ssp > 150).mean() * 100:.1f}%)"),
+        ("Periods", f"{len(ssp):,}"),
+    ]
+
+    if not niv.empty and niv.notna().any():
+        stats.extend([
+            ("", ""),
+            ("Mean NIV", f"{niv.mean():+,.0f} MW"),
+            ("System long %", f"{(niv > 0).mean() * 100:.0f}%"),
+            ("System short %", f"{(niv < 0).mean() * 100:.0f}%"),
+        ])
+
+    # Accepted volumes
+    if "accepted_offer_vol" in p.columns:
+        offers = p["accepted_offer_vol"]
+        bids = p["accepted_bid_vol"]
+        if offers.notna().any():
+            stats.extend([
+                ("", ""),
+                ("Avg accepted offers", f"{offers.mean():,.0f} MW"),
+                ("Avg accepted bids", f"{bids.abs().mean():,.0f} MW"),
+            ])
+
+    rows = []
+    for label, value in stats:
+        if label == "":
+            rows.append(html.Tr([html.Td("", colSpan=2, style={"height": "6px"})]))
+        else:
+            rows.append(html.Tr([
+                html.Td(label, style={"color": "#777", "padding": "2px 6px"}),
+                html.Td(value, style={"textAlign": "right", "padding": "2px 6px", "fontWeight": "500"}),
+            ]))
+
+    return html.Div([
+        _label("PRICE STATISTICS (30d)"),
+        html.Table(rows, style={"width": "100%", "borderCollapse": "collapse"}),
+    ])
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TAB: FORECASTS
+# ═════════════════════════════════════════════════════════════════════════════
+
+def build_forecasts_tab(live: LiveData, hist: HistoricalData, static: StaticData) -> html.Div:
+    return html.Div([
+        dbc.Row([
+            dbc.Col(_panel([_wind_forecast_chart(hist, live)]), width=8),
+            dbc.Col(_panel([_gen_availability_table(hist, static)]), width=4),
+        ], className="mb-2 g-2"),
+        dbc.Row([
+            dbc.Col(_panel([_weather_wind_chart(hist)]), width=6),
+            dbc.Col(_panel([_weather_solar_chart(hist)]), width=6),
+        ], className="mb-2 g-2"),
+        dbc.Row([
+            dbc.Col(_panel([_demand_forecast_chart(hist, live)]), width=6),
+            dbc.Col(_panel([_frequency_summary(hist)]), width=6),
+        ], className="g-2"),
+    ])
+
+
+def _wind_forecast_chart(hist: HistoricalData, live: LiveData) -> dcc.Graph:
+    """Wind generation forecast vs actual."""
+    wf = hist.wind_forecast
+    gen = live.generation
+
+    fig = go.Figure()
+
+    # Actual wind generation (from live)
+    if not gen.empty:
+        wind = gen[gen["fuel_type"] == "wind"].copy()
+        if not wind.empty:
+            fig.add_trace(go.Scatter(
+                x=wind["timestamp"], y=wind["generation_mw"], name="Actual",
+                line=dict(color="#2196F3", width=2),
+                hovertemplate="Actual: %{y:,.0f} MW<extra></extra>",
+            ))
+
+    # Forecast
+    if not wf.empty:
+        fig.add_trace(go.Scatter(
+            x=wf["timestamp"], y=wf["generation_mw"], name="Forecast",
+            line=dict(color="#FFC107", width=1.5, dash="dot"),
+            hovertemplate="Forecast: %{y:,.0f} MW<extra></extra>",
+        ))
+
+    fig.update_layout(**_chart_layout("WIND GENERATION — actual vs ESO forecast (MW)", 300))
+    fig.update_yaxes(title_text="MW")
+    return dcc.Graph(figure=fig, config={"displayModeBar": False})
+
+
+def _gen_availability_table(hist: HistoricalData, static: StaticData) -> html.Div:
+    """Generation availability vs installed capacity."""
+    ga = hist.gen_availability
+    if ga.empty:
+        return html.Div("No availability data", style={"color": "#555"})
+
+    # Get the earliest forecast date (soonest)
+    latest = ga.groupby("fuel_type")["available_mw"].first().to_dict()
+    installed = static.fuel_capacity
+
+    fuel_display = {
+        "nuclear": "Nuclear", "gas_ccgt": "Gas CCGT", "gas_ocgt": "Gas OCGT",
+        "biomass": "Biomass", "wind": "Wind", "hydro": "Hydro",
+        "pumped_storage": "Pumped Storage", "oil": "Oil", "other": "Other",
+        "coal": "Coal",
+    }
+
+    rows = []
+    for fuel, avail_mw in sorted(latest.items(), key=lambda x: -x[1]):
+        if fuel.startswith("ic_"):
+            continue
+        display = fuel_display.get(fuel, fuel)
+        inst_fuels = FUEL_INSTALLED_MAP.get(fuel, [fuel])
+        inst = sum(installed.get(f, 0) for f in inst_fuels)
+        pct = (avail_mw / inst * 100) if inst > 0 else 0
+        outage = max(0, inst - avail_mw)
+
+        colour = "#4CAF50" if pct > 80 else "#FFC107" if pct > 50 else "#F44336"
+        rows.append(html.Tr([
+            html.Td(display, style={"padding": "2px 4px", "fontSize": "9px"}),
+            html.Td(f"{inst / 1000:.1f}", style={"textAlign": "right", "color": "#666", "padding": "2px 4px"}),
+            html.Td(f"{avail_mw / 1000:.1f}", style={"textAlign": "right", "padding": "2px 4px"}),
+            html.Td(f"{outage / 1000:.1f}", style={"textAlign": "right", "color": "#F44336" if outage > 100 else "#555", "padding": "2px 4px"}),
+            html.Td(f"{pct:.0f}%", style={"textAlign": "right", "color": colour, "padding": "2px 4px"}),
+        ], style={"lineHeight": "16px"}))
+
+    return html.Div([
+        _label("GENERATION AVAILABILITY (forecast)"),
+        html.Table([
+            html.Thead(html.Tr([
+                html.Th("FUEL"), html.Th("INST GW", style={"textAlign": "right"}),
+                html.Th("AVAIL GW", style={"textAlign": "right"}),
+                html.Th("OUTAGE GW", style={"textAlign": "right"}),
+                html.Th("AVAIL %", style={"textAlign": "right"}),
+            ], style={"color": "#444", "fontSize": "9px"})),
+            html.Tbody(rows),
+        ], style={"width": "100%", "borderCollapse": "collapse"}),
+        html.Div(
+            "Source: BMRS /forecast/availability/daily. Includes planned + forced outages.",
+            style={"color": "#3a3a3a", "fontSize": "8px", "marginTop": "4px"},
+        ),
+    ])
+
+
+def _weather_wind_chart(hist: HistoricalData) -> dcc.Graph:
+    """Wind speed index — offshore and onshore."""
+    wi = hist.weather_index
+    if wi.empty:
+        return dcc.Graph(figure=go.Figure(), style={"height": "260px"})
+
+    fig = go.Figure()
+    if "offshore_wind_ms" in wi.columns:
+        fig.add_trace(go.Scatter(
+            x=wi["timestamp"], y=wi["offshore_wind_ms"], name="Offshore (100m)",
+            line=dict(color="#2196F3", width=1.5),
+            hovertemplate="%{y:.1f} m/s<extra>Offshore</extra>",
+        ))
+    if "onshore_wind_ms" in wi.columns:
+        fig.add_trace(go.Scatter(
+            x=wi["timestamp"], y=wi["onshore_wind_ms"], name="Onshore (100m)",
+            line=dict(color="#64B5F6", width=1, dash="dot"),
+            hovertemplate="%{y:.1f} m/s<extra>Onshore</extra>",
+        ))
+    # Cut-in and cut-out reference lines
+    fig.add_hline(y=3, line_color="#444", line_width=0.5, annotation_text="cut-in",
+                  annotation_font_color="#555", annotation_font_size=8)
+    fig.add_hline(y=25, line_color="#F44336", line_width=0.5, annotation_text="cut-out",
+                  annotation_font_color="#F44336", annotation_font_size=8)
+
+    fig.update_layout(**_chart_layout("WIND SPEED INDEX — 15 UK sites (7d + 3d forecast, m/s)", 260))
+    fig.update_yaxes(title_text="m/s")
+    return dcc.Graph(figure=fig, config={"displayModeBar": False})
+
+
+def _weather_solar_chart(hist: HistoricalData) -> dcc.Graph:
+    """Solar irradiance + temperature."""
+    wi = hist.weather_index
+    if wi.empty:
+        return dcc.Graph(figure=go.Figure(), style={"height": "260px"})
+
+    fig = go.Figure()
+    if "solar_ghi_wm2" in wi.columns:
+        fig.add_trace(go.Scatter(
+            x=wi["timestamp"], y=wi["solar_ghi_wm2"], name="GHI (W/m²)",
+            line=dict(color="#FFC107", width=1.5),
+            fill="tozeroy", fillcolor="rgba(255,193,7,0.1)",
+            hovertemplate="%{y:.0f} W/m²<extra>GHI</extra>",
+        ))
+    if "temperature_c" in wi.columns:
+        fig.add_trace(go.Scatter(
+            x=wi["timestamp"], y=wi["temperature_c"], name="Temp (°C)",
+            line=dict(color="#F44336", width=1, dash="dot"),
+            yaxis="y2",
+            hovertemplate="%{y:.1f}°C<extra>Temp</extra>",
+        ))
+
+    fig.update_layout(**_chart_layout("SOLAR IRRADIANCE + TEMPERATURE (7d + 3d forecast)", 260))
+    fig.update_layout(
+        yaxis2=dict(overlaying="y", side="right", gridcolor="#262626",
+                    title="°C", title_font_color="#F44336"),
+    )
+    fig.update_yaxes(title_text="W/m²")
+    return dcc.Graph(figure=fig, config={"displayModeBar": False})
+
+
+def _demand_forecast_chart(hist: HistoricalData, live: LiveData) -> dcc.Graph:
+    """Demand forecast vs actual."""
+    fc = hist.demand_forecast
+    demand = live.demand
+
+    fig = go.Figure()
+    if not demand.empty:
+        fig.add_trace(go.Scatter(
+            x=demand["timestamp"], y=demand["demand_mw"], name="Actual (INDO)",
+            line=dict(color="#2196F3", width=1.5),
+            hovertemplate="%{y:,.0f} MW<extra>Actual</extra>",
+        ))
+    if not fc.empty:
+        fig.add_trace(go.Scatter(
+            x=fc["forecast_timestamp"], y=fc["national_demand_mw"], name="Forecast",
+            line=dict(color="#FFC107", width=1.5, dash="dot"),
+            hovertemplate="%{y:,.0f} MW<extra>Forecast</extra>",
+        ))
+
+    fig.update_layout(**_chart_layout("DEMAND — actual INDO vs ESO day-ahead forecast (MW)", 260))
+    fig.update_yaxes(title_text="MW")
+    return dcc.Graph(figure=fig, config={"displayModeBar": False})
+
+
+def _frequency_summary(hist: HistoricalData) -> html.Div:
+    """System frequency statistics."""
+    fs = hist.frequency_stats
+    if not fs:
+        return html.Div("No frequency data", style={"color": "#555"})
+
+    items = [
+        _label("SYSTEM FREQUENCY (24h, 1-second resolution)"),
+    ]
+
+    stats = [
+        ("Mean", f"{fs.get('mean', 0):.4f} Hz"),
+        ("Min", f"{fs.get('min_f', 0):.4f} Hz"),
+        ("Max", f"{fs.get('max_f', 0):.4f} Hz"),
+        ("StdDev", f"{fs.get('stddev', 0):.4f} Hz"),
+        ("Samples", f"{int(fs.get('total', 0)):,}"),
+        ("Below 49.8 Hz", f"{int(fs.get('below_49_8', 0)):,}"),
+        ("Above 50.2 Hz", f"{int(fs.get('above_50_2', 0)):,}"),
+    ]
+
+    for label, value in stats:
+        items.append(html.Div([
+            html.Span(label, style={"color": "#777", "width": "100px", "display": "inline-block"}),
+            html.Span(value, style={"fontWeight": "500"}),
+        ], style={"lineHeight": "18px"}))
+
+    items.append(html.Div(
+        "Nominal: 50.000 Hz. Statutory limits: 49.5–50.5 Hz. "
+        "Below 49.8 or above 50.2 = frequency event.",
+        style={"color": "#3a3a3a", "fontSize": "8px", "marginTop": "8px"},
+    ))
+
+    return _panel(items)
