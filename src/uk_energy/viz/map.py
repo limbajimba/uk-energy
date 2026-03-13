@@ -2,25 +2,26 @@
 map.py — Interactive Folium map of the UK electricity system.
 
 Features:
-  - All generation plants, colour-coded by fuel type
-  - Layer controls to toggle fuel types on/off
+  - Generation plants colour-coded by fuel type
+  - Status-based layer groups (operational, construction, consented, planning)
+  - Marker clustering for performance with 13k+ plants
   - Popup with plant details (name, capacity, fuel, owner, status)
-  - Transmission line overlay from OSM
-  - Interconnector lines with tooltips
-  - GSP markers
+  - Transmission substations (optional layer)
+  - Interconnector lines with capacity labels
   - Saves as output/uk_energy_map.html
 """
 
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from loguru import logger
 
-from uk_energy.config import INTERCONNECTORS_REF, MAP_OUTPUT, OSM_RAW, PLANTS_UNIFIED
+from uk_energy.config import INTERCONNECTORS_REF, MAP_OUTPUT, OSM_RAW, OUTPUT_DIR, PLANTS_UNIFIED
 
 # Fuel type → hex colour
 FUEL_COLOURS: dict[str, str] = {
@@ -35,195 +36,237 @@ FUEL_COLOURS: dict[str, str] = {
     "oil":                "#795548",  # brown
     "biomass":            "#4CAF50",  # green
     "hydro_run_of_river": "#00BCD4",  # cyan
-    "hydro_pumped_storage":"#006064",  # dark cyan
+    "hydro_pumped_storage": "#006064",  # dark cyan
     "battery_storage":    "#E91E63",  # pink
+    "hydrogen":           "#00E676",  # bright green
     "interconnector":     "#607D8B",  # blue-grey
     "wave_tidal":         "#80DEEA",  # light cyan
+    "geothermal":         "#FF6F00",  # dark amber
     "other":              "#9E9E9E",  # grey
     "unknown":            "#BDBDBD",  # light grey
 }
 
+# Human-readable fuel labels
+FUEL_LABELS: dict[str, str] = {
+    "wind_onshore": "Wind (Onshore)",
+    "wind_offshore": "Wind (Offshore)",
+    "solar_pv": "Solar PV",
+    "gas_ccgt": "Gas CCGT",
+    "gas_ocgt": "Gas OCGT",
+    "gas_chp": "Gas CHP",
+    "nuclear": "Nuclear",
+    "coal": "Coal",
+    "oil": "Oil",
+    "biomass": "Biomass",
+    "hydro_run_of_river": "Hydro",
+    "hydro_pumped_storage": "Pumped Storage",
+    "battery_storage": "Battery Storage",
+    "hydrogen": "Hydrogen",
+    "wave_tidal": "Wave & Tidal",
+    "geothermal": "Geothermal",
+    "interconnector": "Interconnector",
+    "other": "Other",
+    "unknown": "Unknown",
+}
+
 
 def _fuel_colour(fuel: str) -> str:
-    """Get hex colour for a fuel type."""
     return FUEL_COLOURS.get(fuel, FUEL_COLOURS["unknown"])
 
 
+def _fuel_label(fuel: str) -> str:
+    return FUEL_LABELS.get(fuel, fuel.replace("_", " ").title())
+
+
 def _capacity_radius(capacity_mw: float | None) -> float:
-    """Scale marker radius by capacity (MW)."""
     if capacity_mw is None or capacity_mw <= 0:
-        return 4
-    import math
-    return max(4, min(25, 4 + math.log10(max(1, capacity_mw)) * 4))
+        return 3
+    return max(3, min(20, 3 + math.log10(max(1, capacity_mw)) * 3.5))
 
 
 def create_map(plants_df: pd.DataFrame | None = None) -> Path:
     """
-    Create the interactive Folium map.
+    Create an interactive Folium map of the UK electricity system.
 
-    Args:
-        plants_df: Pre-loaded plants DataFrame. If None, loads from parquet.
-
-    Returns:
-        Path to the saved HTML file.
+    Optimised for performance:
+    - Uses MarkerCluster for non-operational plants
+    - Operational plants shown individually (most important)
+    - Substations as a togglable layer (off by default)
     """
-    try:
-        import folium
-    except ImportError:
-        logger.error("folium not installed — cannot create map")
-        return MAP_OUTPUT
+    import folium
+    from folium.plugins import MarkerCluster
 
-    # Load data
     if plants_df is None:
-        if PLANTS_UNIFIED.exists():
-            plants_df = pd.read_parquet(PLANTS_UNIFIED)
-            logger.info(f"Loaded {len(plants_df)} plants for map")
-        else:
-            logger.warning("No plants data — creating empty map")
-            plants_df = pd.DataFrame()
+        if not PLANTS_UNIFIED.exists():
+            logger.error("plants_unified.parquet not found")
+            return MAP_OUTPUT
+        plants_df = pd.read_parquet(PLANTS_UNIFIED)
+        logger.info(f"Loaded {len(plants_df)} plants for map")
 
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     logger.info("Creating interactive Folium map...")
 
-    # Base map centred on UK
+    # Centre on UK
     m = folium.Map(
         location=[54.5, -2.5],
         zoom_start=6,
         tiles="CartoDB positron",
-        control_scale=True,
+        prefer_canvas=True,  # Much faster rendering for many markers
     )
 
-    # Add multiple tile layers
-    folium.TileLayer("CartoDB dark_matter", name="Dark Mode", show=False).add_to(m)
-    folium.TileLayer("OpenStreetMap", name="OpenStreetMap", show=False).add_to(m)
+    # Add alternative tile layers
+    folium.TileLayer("OpenStreetMap", name="OpenStreetMap").add_to(m)
+    folium.TileLayer("CartoDB dark_matter", name="Dark Mode").add_to(m)
 
-    # ─── Generation Plants ────────────────────────────────────────────────────
-    # One FeatureGroup per fuel type for layer control
-    fuel_groups: dict[str, folium.FeatureGroup] = {}
-    all_fuels = sorted(set(
-        str(row.get("fuel_type", "unknown"))
-        for _, row in plants_df.iterrows()
-        if pd.notna(row.get("fuel_type"))
-    )) if not plants_df.empty else []
+    # Filter to plants with valid UK coordinates
+    valid = plants_df[
+        plants_df["lat"].notna() &
+        plants_df["lon"].notna() &
+        plants_df["lat"].between(49.5, 61.5) &
+        plants_df["lon"].between(-9, 2.5)
+    ].copy()
 
-    for fuel in all_fuels:
-        label = fuel.replace("_", " ").title()
-        group = folium.FeatureGroup(name=f"⚡ {label}", show=True)
-        fuel_groups[fuel] = group
+    logger.info(f"Mapping {len(valid)} plants with valid coordinates")
 
-    # Other group for unknowns
-    fuel_groups["unknown"] = folium.FeatureGroup(name="❓ Unknown", show=False)
+    # ─── OPERATIONAL PLANTS (shown by default, individual markers) ───
+    operational = valid[valid["status"] == "operational"]
+    op_group = folium.FeatureGroup(name=f"⚡ Operational ({len(operational):,})", show=True)
 
-    plant_count = 0
-    if not plants_df.empty:
-        for _, row in plants_df.iterrows():
-            lat = row.get("lat")
-            lon = row.get("lon")
-            if lat is None or lon is None:
-                continue
-            try:
-                lat_f = float(lat)
-                lon_f = float(lon)
-            except (TypeError, ValueError):
-                continue
-            if not (-90 <= lat_f <= 90 and -180 <= lon_f <= 180):
-                continue
+    # Group operational plants by fuel type for cleaner legends
+    for fuel_type in sorted(operational["fuel_type"].unique()):
+        fuel_plants = operational[operational["fuel_type"] == fuel_type]
+        colour = _fuel_colour(fuel_type)
+        label = _fuel_label(fuel_type)
 
-            fuel = str(row.get("fuel_type", "unknown"))
-            name = str(row.get("name", "Unknown Plant"))
-            capacity = row.get("capacity_mw")
-            status = str(row.get("status", "unknown"))
-            owner = str(row.get("owner") or "")
-            dno = str(row.get("dno_region") or "")
+        for _, row in fuel_plants.iterrows():
+            cap = row.get("capacity_mw")
+            cap_str = f"{cap:,.0f} MW" if pd.notna(cap) and cap > 0 else "N/A"
+            name = str(row.get("name", "Unknown"))
+            owner = str(row.get("owner", "")) or "N/A"
 
-            colour = _fuel_colour(fuel)
-            radius = _capacity_radius(float(capacity) if pd.notna(capacity) else None)
+            popup_html = (
+                f"<b>{name}</b><br>"
+                f"<b>Fuel:</b> {label}<br>"
+                f"<b>Capacity:</b> {cap_str}<br>"
+                f"<b>Owner:</b> {owner}<br>"
+                f"<b>Status:</b> Operational"
+            )
 
-            popup_html = f"""
-            <div style="font-family: sans-serif; min-width: 200px;">
-                <h4 style="margin:0 0 8px 0;">{name}</h4>
-                <table style="font-size:12px;">
-                    <tr><td><b>Fuel:</b></td><td>{fuel.replace("_", " ").title()}</td></tr>
-                    <tr><td><b>Capacity:</b></td><td>{f"{capacity:.0f} MW" if pd.notna(capacity) else "Unknown"}</td></tr>
-                    <tr><td><b>Status:</b></td><td>{status.title()}</td></tr>
-                    <tr><td><b>Owner:</b></td><td>{owner or "Unknown"}</td></tr>
-                    <tr><td><b>Region:</b></td><td>{dno or "Unknown"}</td></tr>
-                </table>
-            </div>
-            """
-
-            marker = folium.CircleMarker(
-                location=[lat_f, lon_f],
-                radius=radius,
+            folium.CircleMarker(
+                location=[row["lat"], row["lon"]],
+                radius=_capacity_radius(cap),
                 color=colour,
                 fill=True,
                 fill_color=colour,
-                fill_opacity=0.75,
+                fill_opacity=0.7,
                 weight=1,
-                popup=folium.Popup(popup_html, max_width=280),
-                tooltip=f"{name} ({capacity:.0f} MW)" if pd.notna(capacity) else name,
+                popup=folium.Popup(popup_html, max_width=250),
+                tooltip=f"{name} ({cap_str})",
+            ).add_to(op_group)
+
+    op_group.add_to(m)
+    logger.info(f"Added {len(operational)} operational plants")
+
+    # ─── NON-OPERATIONAL PLANTS (clustered, off by default) ───
+    for status_name, show_default in [
+        ("construction", False),
+        ("consented", False),
+        ("planning", False),
+    ]:
+        status_plants = valid[valid["status"] == status_name]
+        if status_plants.empty:
+            continue
+
+        status_label = status_name.title()
+        cap_total = status_plants["capacity_mw"].sum()
+        group = folium.FeatureGroup(
+            name=f"{'🏗️' if status_name == 'construction' else '📋' if status_name == 'consented' else '📝'} "
+                 f"{status_label} ({len(status_plants):,}, {cap_total:,.0f} MW)",
+            show=show_default,
+        )
+
+        cluster = MarkerCluster(
+            options={"maxClusterRadius": 50, "disableClusteringAtZoom": 10}
+        ).add_to(group)
+
+        for _, row in status_plants.iterrows():
+            cap = row.get("capacity_mw")
+            cap_str = f"{cap:,.0f} MW" if pd.notna(cap) and cap > 0 else "N/A"
+            name = str(row.get("name", "Unknown"))
+            fuel = _fuel_label(str(row.get("fuel_type", "unknown")))
+            colour = _fuel_colour(str(row.get("fuel_type", "unknown")))
+
+            popup_html = (
+                f"<b>{name}</b><br>"
+                f"<b>Fuel:</b> {fuel}<br>"
+                f"<b>Capacity:</b> {cap_str}<br>"
+                f"<b>Status:</b> {status_label}"
             )
 
-            group = fuel_groups.get(fuel, fuel_groups["unknown"])
-            marker.add_to(group)
-            plant_count += 1
+            folium.CircleMarker(
+                location=[row["lat"], row["lon"]],
+                radius=max(3, _capacity_radius(cap) * 0.7),
+                color=colour,
+                fill=True,
+                fill_color=colour,
+                fill_opacity=0.4,
+                weight=1,
+                popup=folium.Popup(popup_html, max_width=250),
+                tooltip=f"{name} ({cap_str}) [{status_label}]",
+            ).add_to(cluster)
 
-    for group in fuel_groups.values():
         group.add_to(m)
+        logger.info(f"Added {len(status_plants)} {status_name} plants (clustered)")
 
-    # ─── Interconnectors ─────────────────────────────────────────────────────
-    ic_group = folium.FeatureGroup(name="🔗 Interconnectors", show=True)
-
+    # ─── INTERCONNECTORS ───
     if INTERCONNECTORS_REF.exists():
         try:
             ic_data = json.loads(INTERCONNECTORS_REF.read_text())
+            ic_group = folium.FeatureGroup(name="🔗 Interconnectors (10.3 GW)", show=True)
+
             for ic in ic_data.get("interconnectors", []):
                 gb = ic.get("gb_terminal", {})
                 foreign = ic.get("foreign_terminal", {})
+                if not all(k in gb for k in ("lat", "lon")) or not all(k in foreign for k in ("lat", "lon")):
+                    continue
 
-                if all(k in gb for k in ("lat", "lon")) and all(k in foreign for k in ("lat", "lon")):
-                    # Draw the interconnector cable
-                    folium.PolyLine(
-                        locations=[
-                            [gb["lat"], gb["lon"]],
-                            [foreign["lat"], foreign["lon"]],
-                        ],
-                        color="#607D8B",
-                        weight=3,
-                        opacity=0.8,
-                        tooltip=(
-                            f"{ic['name']}: {ic['capacity_mw']} MW "
-                            f"({ic['countries'][0]} ↔ {ic['countries'][1]})"
-                        ),
-                        popup=folium.Popup(
-                            f"<b>{ic['name']}</b><br>"
-                            f"Capacity: {ic['capacity_mw']:,} MW<br>"
-                            f"Route: {ic['countries'][0]} ↔ {ic['countries'][1]}<br>"
-                            f"Type: {ic.get('cable_type', 'HVDC')}<br>"
-                            f"Commissioned: {ic.get('commissioned_year', 'N/A')}<br>"
-                            f"Length: {ic.get('length_km', '?')} km",
-                            max_width=250,
-                        ),
-                        dash_array="10 5",
-                    ).add_to(ic_group)
+                name = ic.get("name", "Unknown")
+                cap = ic.get("capacity_mw", "?")
+                route = ic.get("route", "")
+                country = ic.get("foreign_country", "")
 
-                    # GB terminal marker
-                    folium.CircleMarker(
-                        location=[gb["lat"], gb["lon"]],
-                        radius=8,
-                        color="#37474F",
-                        fill=True,
-                        fill_color="#607D8B",
-                        fill_opacity=0.9,
-                        tooltip=f"{ic['id']} — GB terminal: {gb.get('name', '')}",
-                    ).add_to(ic_group)
+                # Dashed line for interconnector
+                folium.PolyLine(
+                    locations=[
+                        [gb["lat"], gb["lon"]],
+                        [foreign["lat"], foreign["lon"]],
+                    ],
+                    color="#455A64",
+                    weight=3,
+                    dash_array="10 6",
+                    opacity=0.8,
+                    tooltip=f"{name}: {cap} MW ({route})",
+                ).add_to(ic_group)
 
+                # GB terminal marker
+                folium.CircleMarker(
+                    location=[gb["lat"], gb["lon"]],
+                    radius=6,
+                    color="#455A64",
+                    fill=True,
+                    fill_color="#78909C",
+                    fill_opacity=0.9,
+                    weight=2,
+                    tooltip=f"{name} (GB) — {cap} MW",
+                ).add_to(ic_group)
+
+            ic_group.add_to(m)
+            logger.info(f"Added interconnector lines")
         except Exception as exc:
-            logger.warning(f"Could not add interconnectors to map: {exc}")
+            logger.warning(f"Could not add interconnectors: {exc}")
 
-    ic_group.add_to(m)
-
-    # ─── OSM Substations ────────────────────────────────────────────────────
-    sub_group = folium.FeatureGroup(name="⬡ Substations (OSM)", show=False)
+    # ─── TRANSMISSION SUBSTATIONS (off by default) ───
+    sub_group = folium.FeatureGroup(name="⬡ Transmission Substations (≥132kV)", show=False)
     osm_sub_path = OSM_RAW / "substations.json"
     if osm_sub_path.exists():
         try:
@@ -233,7 +276,6 @@ def create_map(plants_df: pd.DataFrame | None = None) -> Path:
                 if el.get("type") != "node" or "lat" not in el or "lon" not in el:
                     continue
                 tags = el.get("tags", {})
-                # Only include transmission-grade substations (≥132kV) or named ones
                 voltage_str = tags.get("voltage", "")
                 voltage_kv = 0.0
                 try:
@@ -250,40 +292,50 @@ def create_map(plants_df: pd.DataFrame | None = None) -> Path:
                 voltage_display = f"{voltage_kv:.0f}kV" if voltage_kv > 0 else "?"
                 folium.CircleMarker(
                     location=[el["lat"], el["lon"]],
-                    radius=3,
+                    radius=2,
                     color="#455A64",
                     fill=True,
                     fill_color="#78909C",
-                    fill_opacity=0.6,
-                    weight=1,
+                    fill_opacity=0.5,
+                    weight=0.5,
                     tooltip=f"{name} ({voltage_display})",
                 ).add_to(sub_group)
                 sub_count += 1
             logger.info(f"Added {sub_count} transmission substations to map")
         except Exception as exc:
-            logger.warning(f"Could not add OSM substations to map: {exc}")
+            logger.warning(f"Could not add substations: {exc}")
     sub_group.add_to(m)
 
-    # ─── Layer Control ────────────────────────────────────────────────────────
-    folium.LayerControl(collapsed=False).add_to(m)
-
-    # ─── Title ───────────────────────────────────────────────────────────────
-    title_html = f"""
-    <div style="position: fixed; top: 10px; left: 60px; z-index: 1000;
-                background: white; padding: 10px 15px; border-radius: 8px;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.3); font-family: sans-serif;">
-        <h3 style="margin: 0 0 4px 0;">🇬🇧 UK Electricity System</h3>
-        <p style="margin: 0; font-size: 12px; color: #666;">
-            {plant_count:,} generation assets | {len(ic_data.get("interconnectors", [])) if INTERCONNECTORS_REF.exists() else 0} interconnectors
-        </p>
+    # ─── LEGEND ───
+    legend_html = """
+    <div style="position: fixed; bottom: 30px; left: 30px; z-index: 1000;
+         background: white; padding: 12px 16px; border-radius: 8px;
+         box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px;
+         max-height: 400px; overflow-y: auto;">
+    <b>🇬🇧 UK Electricity System</b><br>
+    <b style="font-size:11px; color:#666;">Fuel Types</b><br>
+    """
+    for fuel, colour in FUEL_COLOURS.items():
+        if fuel in ("interconnector", "other", "unknown"):
+            continue
+        label = _fuel_label(fuel)
+        legend_html += f'<span style="color:{colour}; font-size:16px;">●</span> {label}<br>'
+    legend_html += """
+    <br><b style="font-size:11px; color:#666;">Marker Size = Capacity (MW)</b>
     </div>
     """
-    m.get_root().html.add_child(folium.Element(title_html))
+    m.get_root().html.add_child(folium.Element(legend_html))
 
-    # Save
-    MAP_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    # ─── LAYER CONTROL ───
+    folium.LayerControl(collapsed=False).add_to(m)
+
+    # ─── SAVE ───
     m.save(str(MAP_OUTPUT))
-    logger.success(f"Interactive map saved → {MAP_OUTPUT} ({plant_count:,} plants)")
+    op_cap = operational["capacity_mw"].sum()
+    logger.success(
+        f"Interactive map saved → {MAP_OUTPUT} "
+        f"({len(operational)} operational, {op_cap:,.0f} MW)"
+    )
     return MAP_OUTPUT
 
 

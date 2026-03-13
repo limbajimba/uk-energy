@@ -114,13 +114,63 @@ def _map_fuel_type(raw: Any, mapping: dict[str, str]) -> str:
     if not raw or not isinstance(raw, str):
         return "unknown"
     raw_lower = raw.lower().strip()
-    # Direct lookup
+
+    # Direct lookup (exact match)
     if raw_lower in mapping:
         return mapping[raw_lower]
-    # Partial match
+
+    # Prioritised keyword matching (order matters — more specific first)
+    keyword_map = [
+        ("pumped storage", "hydro_pumped_storage"),
+        ("pumped hydro", "hydro_pumped_storage"),
+        ("pump storage", "hydro_pumped_storage"),
+        ("hydrogen", "hydrogen"),
+        ("offshore wind", "wind_offshore"),
+        ("wind offshore", "wind_offshore"),
+        ("onshore wind", "wind_onshore"),
+        ("wind onshore", "wind_onshore"),
+        ("solar photovoltaic", "solar_pv"),
+        ("solar pv", "solar_pv"),
+        ("solar", "solar_pv"),
+        ("photovoltaic", "solar_pv"),
+        ("battery", "battery_storage"),
+        ("storage", "battery_storage"),
+        ("nuclear", "nuclear"),
+        ("biomass", "biomass"),
+        ("bioenergy", "biomass"),
+        ("biogas", "biomass"),
+        ("landfill", "biomass"),
+        ("sewage", "biomass"),
+        ("anaerobic", "biomass"),
+        ("efw", "biomass"),
+        ("waste", "biomass"),
+        ("incineration", "biomass"),
+        ("ccgt", "gas_ccgt"),
+        ("combined cycle", "gas_ccgt"),
+        ("natural gas", "gas_ccgt"),
+        ("ocgt", "gas_ocgt"),
+        ("gas turbine", "gas_ocgt"),
+        ("chp", "gas_chp"),
+        ("coal", "coal"),
+        ("oil", "oil"),
+        ("diesel", "oil"),
+        ("wind", "wind_onshore"),
+        ("hydro", "hydro_run_of_river"),
+        ("tidal", "wave_tidal"),
+        ("wave", "wave_tidal"),
+        ("geothermal", "geothermal"),
+        ("interconnect", "interconnector"),
+    ]
+
+    for keyword, fuel_type in keyword_map:
+        if keyword in raw_lower:
+            return fuel_type
+
+    # Fallback: check the mapping dict with partial match
     for key, val in mapping.items():
-        if key in raw_lower or raw_lower in key:
+        if key in raw_lower:
             return val
+
     return "unknown"
 
 
@@ -427,10 +477,28 @@ class PlantMatcher:
             if norm in existing_names:
                 continue
 
-            # Only include operational or construction-stage plants
-            status = str(row.get("status", "unknown")).lower()
-            if status in ("refused", "withdrawn"):
-                continue
+            # Map REPD status properly — use development_status_short if available
+            raw_status = str(row.get("status", "unknown")).lower().strip()
+            dev_status = str(row.get("development_status_short", "")).lower().strip()
+
+            # Map REPD statuses to canonical values
+            if raw_status == "operational" or dev_status == "operational":
+                status = "operational"
+            elif raw_status == "construction" or dev_status in ("under construction",):
+                status = "construction"
+            elif dev_status in ("awaiting construction",):
+                status = "consented"  # has planning permission, not yet built
+            elif raw_status == "planning" or dev_status in ("planning application submitted", "application submitted"):
+                status = "planning"
+            elif raw_status in ("refused", "withdrawn") or dev_status in (
+                "application refused", "appeal refused", "application withdrawn",
+                "appeal withdrawn", "abandoned",
+            ):
+                continue  # skip refused/withdrawn
+            elif dev_status == "revised":
+                status = "planning"  # revised applications
+            else:
+                status = raw_status if raw_status != "unknown" else "unknown"
 
             lat_raw = row.get("lat", row.get("latitude", np.nan))
             lon_raw = row.get("lon", row.get("longitude", np.nan))
