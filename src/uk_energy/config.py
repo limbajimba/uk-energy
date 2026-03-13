@@ -1,7 +1,8 @@
 """
-config.py — All API endpoints, file paths, and constants for the UK Energy project.
+config.py — Centralised configuration for the UK Energy project.
 
-Every magic string lives here. Import this module; never hard-code paths elsewhere.
+All API endpoints, file paths, constants, and taxonomy definitions live here.
+Import this module instead of hard-coding magic strings elsewhere.
 """
 
 from __future__ import annotations
@@ -10,11 +11,11 @@ import os
 from pathlib import Path
 
 # ─── Project Root ─────────────────────────────────────────────────────────────
-# Support both installed-package and editable-install layouts
-_HERE = Path(__file__).resolve().parent
+# Supports both installed-package and editable-install layouts.
+_HERE: Path = Path(__file__).resolve().parent
 PROJECT_ROOT: Path = _HERE.parents[1]  # src/uk_energy/ → project root
 
-# Allow override via environment variable (useful in tests)
+# Allow override via environment variable (useful in CI / tests).
 if _root_override := os.environ.get("UK_ENERGY_ROOT"):
     PROJECT_ROOT = Path(_root_override).resolve()
 
@@ -54,41 +55,47 @@ STATS_CSV: Path = OUTPUT_DIR / "grid_stats.csv"
 
 
 def ensure_dirs() -> None:
-    """Create all required directories if they don't exist."""
-    for d in [
+    """Create all required project directories if they do not already exist."""
+    for directory in (
         BMRS_RAW, NESO_RAW, OSM_RAW, CARBON_RAW, WRI_RAW, OSUKED_RAW,
         REPD_RAW, DUKES_RAW, PROCESSED_DIR, REFERENCE_DIR, OUTPUT_DIR, LOGS_DIR,
-    ]:
-        d.mkdir(parents=True, exist_ok=True)
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
 
 
 # ─── API Endpoints ────────────────────────────────────────────────────────────
 
-# Elexon BMRS
+# Elexon BMRS v1 — no API key required
+# Docs: https://bmrs.elexon.co.uk/api-documentation
 BMRS_BASE: str = "https://data.elexon.co.uk/bmrs/api/v1"
 BMRS_BMUNITS_ALL: str = f"{BMRS_BASE}/reference/bmunits/all"
-BMRS_B1610: str = f"{BMRS_BASE}/datasets/B1610"          # Actual generation per unit
-BMRS_B1620: str = f"{BMRS_BASE}/datasets/B1620"          # Generation by fuel type
+BMRS_B1610: str = f"{BMRS_BASE}/datasets/B1610"       # Actual generation per unit (30 min)
+BMRS_B1620: str = f"{BMRS_BASE}/datasets/B1620"       # Aggregated generation by fuel type
 BMRS_INTERCONNECTOR_FLOWS: str = f"{BMRS_BASE}/datasets/INTERFUELHH"
 
-# NESO CKAN
+# NESO CKAN data portal
+# Docs: https://api.neso.energy/api/3
 NESO_CKAN_BASE: str = "https://api.neso.energy/api/3/action"
 NESO_PACKAGE_SEARCH: str = f"{NESO_CKAN_BASE}/package_search"
 NESO_RESOURCE_SHOW: str = f"{NESO_CKAN_BASE}/resource_show"
 NESO_PACKAGE_SHOW: str = f"{NESO_CKAN_BASE}/package_show"
 
-# Carbon Intensity API
+# National Grid ESO Carbon Intensity API
+# Docs: https://carbon-intensity.github.io/api-definitions/
 CARBON_BASE: str = "https://api.carbonintensity.org.uk"
 CARBON_REGIONAL: str = f"{CARBON_BASE}/regional"
 CARBON_GENERATION: str = f"{CARBON_BASE}/generation"
 
 # Overpass API (OpenStreetMap)
+# Docs: https://wiki.openstreetmap.org/wiki/Overpass_API
 OVERPASS_URL: str = "https://overpass-api.de/api/interpreter"
-OVERPASS_TIMEOUT: int = 180  # seconds
-# GB bounding box: S, W, N, E
+OVERPASS_TIMEOUT_S: int = 180
+
+# Great Britain bounding box (S, W, N, E) — covers mainland + islands.
 GB_BBOX: tuple[float, float, float, float] = (49.9, -8.2, 60.9, 1.8)
 
-# WRI Global Power Plant Database
+# WRI Global Power Plant Database v1.3.0
+# Docs: https://datasets.wri.org/dataset/globalpowerplantdatabase
 WRI_GITHUB_URL: str = (
     "https://raw.githubusercontent.com/wri/global-power-plant-database/"
     "master/output_database/global_power_plant_database.csv"
@@ -98,36 +105,44 @@ WRI_ZENODO_URL: str = (
 )
 
 # OSUKED Power Station Dictionary
+# Repo: https://github.com/OSUKED/Power-Station-Dictionary
+# These are the canonical raw-data URLs; the actual data has been pre-downloaded
+# to data/raw/osuked/ — see ingest/osuked.py for the loader.
 OSUKED_GITHUB_BASE: str = (
-    "https://raw.githubusercontent.com/OSUKED/Power-Station-Dictionary/main/data/raw"
+    "https://raw.githubusercontent.com/OSUKED/Power-Station-Dictionary/main"
 )
-OSUKED_DICTIONARY_CSV: str = f"{OSUKED_GITHUB_BASE}/dictionary.csv"
-OSUKED_LOCATIONS_CSV: str = f"{OSUKED_GITHUB_BASE}/plant_locations.csv"
-OSUKED_FUEL_TYPES_CSV: str = f"{OSUKED_GITHUB_BASE}/fuel_types.csv"
-OSUKED_NAMES_CSV: str = f"{OSUKED_GITHUB_BASE}/common_names.csv"
+OSUKED_DICTIONARY_CSV: str = f"{OSUKED_GITHUB_BASE}/data/dictionary/ids.csv"
+OSUKED_LOCATIONS_CSV: str = (
+    f"{OSUKED_GITHUB_BASE}/data/linked-datapackages/plant-locations/plant-locations.csv"
+)
+OSUKED_FUEL_TYPES_CSV: str = (
+    f"{OSUKED_GITHUB_BASE}/data/linked-datapackages/bmu-fuel-types/fuel_types.csv"
+)
+OSUKED_NAMES_CSV: str = (
+    f"{OSUKED_GITHUB_BASE}/archive/docs/attribute_sources/common-names/common-names.csv"
+)
 
-# REPD (data.gov.uk)
+# REPD (Renewable Energy Planning Database — data.gov.uk)
 REPD_DATA_GOV_URL: str = (
-    "https://assets.publishing.service.gov.uk/media/"
-    "repd-q3-october-2023.csv"
+    "https://assets.publishing.service.gov.uk/media/repd-q3-october-2023.csv"
 )
 REPD_FALLBACK_URL: str = (
     "https://www.data.gov.uk/dataset/a5b0ed13-c960-49ce-b1f6-3a6bbe0db1b7/repd"
 )
 
-# DUKES (BEIS / DESNZ)
+# DUKES (Digest of UK Energy Statistics, Chapter 5 — DESNZ / BEIS)
 DUKES_BASE: str = "https://assets.publishing.service.gov.uk/media"
 DUKES_SEARCH_URL: str = (
-    "https://www.gov.uk/government/statistics/electricity-chapter-5-digest-of-united-kingdom-energy-statistics-dukes"
+    "https://www.gov.uk/government/statistics/"
+    "electricity-chapter-5-digest-of-united-kingdom-energy-statistics-dukes"
 )
 
 # ─── Rate Limiting ────────────────────────────────────────────────────────────
-BMRS_RATE_LIMIT_RPS: float = 1.0   # requests per second
-DEFAULT_TIMEOUT: int = 30          # seconds per HTTP request
-OVERPASS_TIMEOUT_S: int = 180
+BMRS_RATE_LIMIT_RPS: float = 1.0   # Elexon requests-per-second
+DEFAULT_TIMEOUT: int = 30           # Default HTTP timeout in seconds
 
 # ─── Fuel Type Taxonomy ───────────────────────────────────────────────────────
-# Canonical fuel type names (lowercase, underscored)
+# Canonical fuel-type identifiers used throughout the pipeline (lowercase, underscored).
 FUEL_TYPES: list[str] = [
     "coal",
     "gas_ccgt",
@@ -143,6 +158,7 @@ FUEL_TYPES: list[str] = [
     "solar_pv",
     "wave_tidal",
     "geothermal",
+    "hydrogen",
     "battery_storage",
     "interconnector",
     "demand_response",
@@ -150,8 +166,8 @@ FUEL_TYPES: list[str] = [
     "unknown",
 ]
 
-# ─── DNO Regions ─────────────────────────────────────────────────────────────
-# 14 regions as used by Carbon Intensity API
+# ─── DNO Regions ──────────────────────────────────────────────────────────────
+# 14 GB Distribution Network Operator regions as defined by the Carbon Intensity API.
 DNO_REGION_IDS: dict[int, str] = {
     1:  "North Scotland",
     2:  "South Scotland",
@@ -169,7 +185,7 @@ DNO_REGION_IDS: dict[int, str] = {
     14: "South East England",
 }
 
-# ─── Logging ─────────────────────────────────────────────────────────────────
+# ─── Logging ──────────────────────────────────────────────────────────────────
 LOG_LEVEL: str = os.environ.get("UK_ENERGY_LOG_LEVEL", "INFO")
 LOG_FORMAT: str = (
     "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "

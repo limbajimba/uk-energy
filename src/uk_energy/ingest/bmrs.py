@@ -1,12 +1,15 @@
 """
 bmrs.py — Elexon BMRS data ingestion.
 
-Sources:
-  - BM Unit reference list (all registered BM units)
-  - B1610 — Actual Generation Output per Generation Unit
-  - B1620 — Actual Aggregated Generation per Type
+Sources
+-------
+* BM Unit reference list — all registered Balancing Mechanism units.
+* B1610 — Actual Generation Output per Generation Unit (30-min settlement periods).
+* B1620 — Actual Aggregated Generation per Type.
 
-No API key required. Rate limit: 1 req/sec.
+No API key is required.  Rate limit: ≤1 req/s.
+
+Docs: https://bmrs.elexon.co.uk/api-documentation
 """
 
 from __future__ import annotations
@@ -29,23 +32,25 @@ from uk_energy.ingest._http import RateLimitedClient
 
 
 def _out(filename: str) -> Path:
+    """Return path inside the BMRS raw directory, creating it if needed."""
     BMRS_RAW.mkdir(parents=True, exist_ok=True)
     return BMRS_RAW / filename
 
 
-def fetch_bm_units(force: bool = False) -> Path:
-    """
-    Fetch the complete list of all BM Units from BMRS reference API.
+# ─── Fetch helpers ────────────────────────────────────────────────────────────
 
-    Endpoint: GET /reference/bmunits/all
-    Returns JSON array of {bmUnit, elexonBmUnit, leadPartyName, ...}
+def fetch_bm_units(force: bool = False) -> Path:
+    """Download the complete BM Unit reference list.
+
+    Endpoint: ``GET /reference/bmunits/all``
+    Returns a JSON array of ``{bmUnit, elexonBmUnit, leadPartyName, …}``.
     """
     out = _out("bm_units_all.json")
     if out.exists() and not force:
         logger.info(f"BM units already downloaded: {out}")
         return out
 
-    logger.info("Fetching all BM units from BMRS...")
+    logger.info("Fetching all BM units from BMRS …")
     with RateLimitedClient(rps=BMRS_RATE_LIMIT_RPS) as client:
         try:
             response = client.get(BMRS_BMUNITS_ALL, params={"format": "json"})
@@ -64,29 +69,29 @@ def fetch_b1610(
     period: int = 1,
     force: bool = False,
 ) -> Path:
-    """
-    Fetch B1610 — Actual Generation Output per Generation Unit.
+    """Download B1610 — Actual Generation Output per Generation Unit.
 
-    Args:
-        settlement_date: Date to fetch (defaults to yesterday).
-        period: Settlement period (1–50, 30-min intervals). 0 = all periods.
-        force: Re-download even if file exists.
+    Parameters
+    ----------
+    settlement_date:
+        Date to fetch (defaults to yesterday UTC).
+    period:
+        Settlement period 1–50 (30-min intervals).  ``0`` fetches all periods.
+    force:
+        Re-download even if the file already exists.
     """
     if settlement_date is None:
         settlement_date = datetime.now(tz=timezone.utc) - timedelta(days=1)
 
-    date_str = settlement_date.strftime("%Y-%m-%d")
+    date_str: str = settlement_date.strftime("%Y-%m-%d")
     out = _out(f"b1610_{date_str}.json")
 
     if out.exists() and not force:
         logger.info(f"B1610 already downloaded: {out}")
         return out
 
-    logger.info(f"Fetching B1610 for {date_str} (period {period})...")
-    params: dict[str, str | int] = {
-        "settlementDate": date_str,
-        "format": "json",
-    }
+    logger.info(f"Fetching B1610 for {date_str} (period {period}) …")
+    params: dict[str, str | int] = {"settlementDate": date_str, "format": "json"}
     if period > 0:
         params["settlementPeriod"] = period
 
@@ -106,25 +111,27 @@ def fetch_b1620(
     settlement_date: datetime | None = None,
     force: bool = False,
 ) -> Path:
-    """
-    Fetch B1620 — Actual Aggregated Generation per Type.
+    """Download B1620 — Actual Aggregated Generation per Type.
 
-    Args:
-        settlement_date: Date to fetch (defaults to yesterday).
-        force: Re-download even if file exists.
+    Parameters
+    ----------
+    settlement_date:
+        Date to fetch (defaults to yesterday UTC).
+    force:
+        Re-download even if the file already exists.
     """
     if settlement_date is None:
         settlement_date = datetime.now(tz=timezone.utc) - timedelta(days=1)
 
-    date_str = settlement_date.strftime("%Y-%m-%d")
+    date_str: str = settlement_date.strftime("%Y-%m-%d")
     out = _out(f"b1620_{date_str}.json")
 
     if out.exists() and not force:
         logger.info(f"B1620 already downloaded: {out}")
         return out
 
-    logger.info(f"Fetching B1620 for {date_str}...")
-    params = {"settlementDate": date_str, "format": "json"}
+    logger.info(f"Fetching B1620 for {date_str} …")
+    params: dict[str, str] = {"settlementDate": date_str, "format": "json"}
 
     with RateLimitedClient(rps=BMRS_RATE_LIMIT_RPS) as client:
         try:
@@ -134,25 +141,28 @@ def fetch_b1620(
             logger.success(f"Fetched B1620 {date_str} → {out}")
         except Exception as exc:
             logger.warning(f"B1620 unavailable (endpoint may be deprecated): {exc}")
-            # Save empty placeholder so we don't retry
             out.write_text(json.dumps({"status": "unavailable", "note": str(exc)}))
     return out
 
 
+# ─── Loaders ──────────────────────────────────────────────────────────────────
+
 def load_bm_units() -> pd.DataFrame:
-    """Load BM units JSON into a DataFrame."""
+    """Load BM units JSON into a DataFrame, fetching first if needed."""
     path = _out("bm_units_all.json")
     if not path.exists():
         fetch_bm_units()
-    with open(path) as f:
-        data = json.load(f)
-    # Handle both list and dict-with-data responses
+
+    with open(path) as fh:
+        data = json.load(fh)
+
     if isinstance(data, list):
         rows = data
     elif isinstance(data, dict):
         rows = data.get("data", data.get("results", [data]))
     else:
         rows = []
+
     df = pd.DataFrame(rows)
     logger.info(f"Loaded {len(df)} BM units")
     return df
@@ -162,20 +172,22 @@ def load_b1620(settlement_date: datetime | None = None) -> pd.DataFrame:
     """Load B1620 generation-by-fuel-type JSON into a DataFrame."""
     if settlement_date is None:
         settlement_date = datetime.now(tz=timezone.utc) - timedelta(days=1)
-    date_str = settlement_date.strftime("%Y-%m-%d")
+
+    date_str: str = settlement_date.strftime("%Y-%m-%d")
     path = _out(f"b1620_{date_str}.json")
     if not path.exists():
         fetch_b1620(settlement_date)
-    with open(path) as f:
-        data = json.load(f)
-    if isinstance(data, dict):
-        rows = data.get("data", [])
-    else:
-        rows = data
+
+    with open(path) as fh:
+        data = json.load(fh)
+
+    rows = data.get("data", []) if isinstance(data, dict) else data
     df = pd.DataFrame(rows)
     logger.info(f"Loaded {len(df)} B1620 records for {date_str}")
     return df
 
+
+# ─── Orchestrator ─────────────────────────────────────────────────────────────
 
 def ingest_all(force: bool = False) -> None:
     """Run all BMRS ingestion steps."""
