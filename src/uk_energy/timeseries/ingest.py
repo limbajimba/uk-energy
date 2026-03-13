@@ -91,6 +91,14 @@ def ingest_all(store: TimeSeriesStore | None = None) -> dict[str, int]:
         logger.error(f"Frequency failed: {e}")
         results["frequency"] = 0
 
+    # 5. Weather data (Open-Meteo)
+    try:
+        results["weather"], results["weather_index"] = _ingest_weather(store)
+    except Exception as e:
+        logger.error(f"Weather failed: {e}")
+        results["weather"] = 0
+        results["weather_index"] = 0
+
     if own_store:
         store.close()
 
@@ -145,6 +153,19 @@ def backfill_prices(store: TimeSeriesStore | None = None, days: int = 30) -> int
 
 
 # ─── Forecast + frequency fetchers ──────────────────────────────────────────
+
+def _ingest_weather(store: TimeSeriesStore) -> tuple[int, int]:
+    """Fetch and store weather data from Open-Meteo."""
+    from uk_energy.timeseries.weather import fetch_weather, fetch_wind_index
+
+    raw = fetch_weather(past_days=7, forecast_days=3)
+    raw_n = store.ingest_weather(raw)
+
+    index = fetch_wind_index(past_days=7, forecast_days=3)
+    idx_n = store.ingest_weather_index(index)
+
+    return raw_n, idx_n
+
 
 def _ingest_demand_forecast(store: TimeSeriesStore) -> int:
     """Fetch and store day-ahead demand forecast."""

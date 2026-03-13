@@ -94,6 +94,32 @@ CREATE TABLE IF NOT EXISTS carbon_intensity (
     index_label   VARCHAR
 );
 
+CREATE TABLE IF NOT EXISTS weather (
+    timestamp     TIMESTAMPTZ NOT NULL,
+    site          VARCHAR NOT NULL,
+    category      VARCHAR,
+    wind_speed_100m  DOUBLE,
+    wind_speed_10m   DOUBLE,
+    wind_direction_100m DOUBLE,
+    shortwave_radiation DOUBLE,
+    direct_normal_irradiance DOUBLE,
+    temperature_2m DOUBLE,
+    cloud_cover    DOUBLE,
+    relative_humidity_2m DOUBLE,
+    PRIMARY KEY (timestamp, site)
+);
+
+CREATE TABLE IF NOT EXISTS weather_index (
+    timestamp          TIMESTAMPTZ NOT NULL PRIMARY KEY,
+    offshore_wind_ms   DOUBLE,
+    onshore_wind_ms    DOUBLE,
+    solar_ghi_wm2      DOUBLE,
+    solar_dni_wm2      DOUBLE,
+    cloud_cover_pct    DOUBLE,
+    temperature_c      DOUBLE,
+    humidity_pct       DOUBLE
+);
+
 CREATE SEQUENCE IF NOT EXISTS ingestion_seq START 1;
 
 CREATE TABLE IF NOT EXISTS ingestion_log (
@@ -240,6 +266,42 @@ class TimeSeriesStore:
         self._log_ingestion("frequency", inserted, len(df) - inserted, df["timestamp"], "bmrs")
         return inserted
 
+    def ingest_weather(self, df: pd.DataFrame) -> int:
+        """Ingest raw weather data. Expects columns matching weather table."""
+        if df.empty:
+            return 0
+        before = self._count("weather")
+        self._con.execute("""
+            INSERT OR IGNORE INTO weather
+                (timestamp, site, category, wind_speed_100m, wind_speed_10m,
+                 wind_direction_100m, shortwave_radiation, direct_normal_irradiance,
+                 temperature_2m, cloud_cover, relative_humidity_2m)
+            SELECT timestamp, site, category, wind_speed_100m, wind_speed_10m,
+                   wind_direction_100m, shortwave_radiation, direct_normal_irradiance,
+                   temperature_2m, cloud_cover, relative_humidity_2m
+            FROM df
+        """)
+        inserted = self._count("weather") - before
+        self._log_ingestion("weather", inserted, len(df) - inserted, df["timestamp"], "open-meteo")
+        return inserted
+
+    def ingest_weather_index(self, df: pd.DataFrame) -> int:
+        """Ingest aggregated weather index. Expects columns matching weather_index table."""
+        if df.empty:
+            return 0
+        before = self._count("weather_index")
+        self._con.execute("""
+            INSERT OR IGNORE INTO weather_index
+                (timestamp, offshore_wind_ms, onshore_wind_ms, solar_ghi_wm2,
+                 solar_dni_wm2, cloud_cover_pct, temperature_c, humidity_pct)
+            SELECT timestamp, offshore_wind_ms, onshore_wind_ms, solar_ghi_wm2,
+                   solar_dni_wm2, cloud_cover_pct, temperature_c, humidity_pct
+            FROM df
+        """)
+        inserted = self._count("weather_index") - before
+        self._log_ingestion("weather_index", inserted, len(df) - inserted, df["timestamp"], "open-meteo")
+        return inserted
+
     # ─── Query methods ───────────────────────────────────────────────────
 
     def query(self, sql: str, params: list | None = None) -> pd.DataFrame:
@@ -311,7 +373,8 @@ class TimeSeriesStore:
     def table_stats(self) -> pd.DataFrame:
         """Get row counts and time ranges for all tables."""
         tables = ["generation", "demand", "system_prices", "ic_flows",
-                   "demand_forecast", "gen_availability", "frequency", "carbon_intensity"]
+                   "demand_forecast", "gen_availability", "frequency", "carbon_intensity",
+                   "weather", "weather_index"]
         rows = []
         for t in tables:
             try:
