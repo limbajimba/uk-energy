@@ -1,34 +1,68 @@
 """
 repd.py — Renewable Energy Planning Database (REPD) ingestion.
 
-Downloads the latest REPD CSV from data.gov.uk and parses it into a
-clean DataFrame with standardised column names and fuel type mapping.
+The REPD is published quarterly by DESNZ and lists every renewable energy
+project in the UK with planning status, technology type, capacity, and
+Ordnance Survey grid coordinates (OSGB36 / EPSG:27700).
 
-~10,000+ rows, updated quarterly by DESNZ.
+Pipeline:
+  1. Download CSV (try CKAN API discovery → known URLs → OSUKED mirror)
+  2. Parse and standardise column names
+  3. Convert OSGB36 eastings/northings → WGS84 lat/lon
+  4. Map development statuses to canonical values
+  5. Save processed CSV
 """
 
 from __future__ import annotations
 
-import io
 import re
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from loguru import logger
 
 from uk_energy.config import PROCESSED_DIR, REPD_RAW
 from uk_energy.ingest._http import RateLimitedClient
 
-# Known-good REPD download URLs (try in order)
-REPD_URLS: list[str] = [
-    "https://assets.publishing.service.gov.uk/media/repd-q3-october-2023.csv",
-    "https://assets.publishing.service.gov.uk/government/uploads/system/uploads/attachment_data/file/repd-q3-october-2023.csv",
-    "https://www.data.gov.uk/dataset/a5b0ed13-c960-49ce-b1f6-3a6bbe0db1b7/repd",
-]
+# ─── Download URLs (in priority order) ─────────────────────────────────────
 
-# The data.gov.uk CKAN API endpoint for REPD
 REPD_CKAN_API = "https://www.data.gov.uk/api/3/action/package_show"
 REPD_DATASET_ID = "a5b0ed13-c960-49ce-b1f6-3a6bbe0db1b7"
+
+# OSUKED mirror is the most reliable source (gov.uk URLs change quarterly)
+OSUKED_REPD_URL = (
+    "https://raw.githubusercontent.com/OSUKED/Power-Station-Dictionary/"
+    "main/data/linked-datapackages/renewable-energy-planning-database/"
+    "repd-january-2023.csv"
+)
+
+REPD_FALLBACK_URLS: list[str] = [
+    "https://assets.publishing.service.gov.uk/media/repd-q3-october-2023.csv",
+    OSUKED_REPD_URL,
+]
+
+# ─── Status mapping ─────────────────────────────────────────────────────────
+
+STATUS_MAP: dict[str, str] = {
+    "operational": "operational",
+    "under construction": "construction",
+    "awaiting construction": "consented",
+    "planning application submitted": "planning",
+    "planning permission granted": "consented",
+    "planning permission refused": "refused",
+    "planning permission expired": "expired",
+    "planning application withdrawn": "withdrawn",
+    "appeal lodged": "planning",
+    "appeal granted": "consented",
+    "appeal refused": "refused",
+    "appeal withdrawn": "withdrawn",
+    "revised": "planning",
+    "abandoned": "withdrawn",
+    "no application required": "consented",
+    "scoping": "planning",
+    "decommissioned": "decommissioned",
+}
 
 
 def _out(filename: str) -> Path:
@@ -39,91 +73,145 @@ def _out(filename: str) -> Path:
 def _discover_repd_url(client: RateLimitedClient) -> str | None:
     """Use data.gov.uk CKAN API to find the latest REPD CSV URL."""
     try:
-        response = client.get(
-            REPD_CKAN_API,
-            params={"id": REPD_DATASET_ID},
-        )
+        response = client.get(REPD_CKAN_API, params={"id": REPD_DATASET_ID})
         data = response.json()
         if not data.get("success"):
             return None
         resources = data["result"].get("resources", [])
-        # Find the most recent CSV
         csv_resources = [
             r for r in resources
-            if r.get("format", "").upper() in ("CSV", "TEXT/CSV")
-            and r.get("url")
+            if r.get("format", "").upper() in ("CSV", "TEXT/CSV") and r.get("url")
         ]
         if csv_resources:
-            # Sort by last_modified descending
             csv_resources.sort(
                 key=lambda r: r.get("last_modified") or r.get("created") or "",
                 reverse=True,
             )
-            url: str = csv_resources[0]["url"]
+            url = csv_resources[0]["url"]
             logger.info(f"Discovered REPD URL via CKAN: {url}")
             return url
     except Exception as exc:
-        logger.warning(f"CKAN discovery failed: {exc}")
+        logger.debug(f"CKAN discovery failed: {exc}")
     return None
 
 
-def fetch_repd(force: bool = False) -> Path:
+def _convert_osgb36_to_wgs84(
+    df: pd.DataFrame,
+    easting_col: str,
+    northing_col: str,
+) -> pd.DataFrame:
     """
-    Download the latest REPD CSV from data.gov.uk.
+    Convert OSGB36 (EPSG:27700) eastings/northings to WGS84 lat/lon.
 
-    Returns path to the raw CSV file.
+    Adds 'lat' and 'lon' columns. Handles dirty data (non-numeric chars,
+    out-of-bounds values).
     """
+    try:
+        from pyproj import Transformer
+    except ImportError:
+        logger.warning("pyproj not installed — coordinates will not be converted")
+        df["lat"] = np.nan
+        df["lon"] = np.nan
+        return df
+
+    transformer = Transformer.from_crs("EPSG:27700", "EPSG:4326", always_xy=True)
+
+    # Clean coordinate columns: strip non-numeric chars, convert to float
+    for col in [easting_col, northing_col]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.replace(r"[^\d.]", "", regex=True)
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Valid UK OSGB36 bounds: eastings 0-700000, northings 0-1300000
+    has_coords = (
+        df[easting_col].notna()
+        & df[northing_col].notna()
+        & df[easting_col].between(0, 700_000)
+        & df[northing_col].between(0, 1_300_000)
+    )
+
+    df["lat"] = np.nan
+    df["lon"] = np.nan
+
+    if has_coords.any():
+        lons, lats = transformer.transform(
+            df.loc[has_coords, easting_col].values,
+            df.loc[has_coords, northing_col].values,
+        )
+        df.loc[has_coords, "lat"] = lats
+        df.loc[has_coords, "lon"] = lons
+        logger.info(f"Converted {has_coords.sum():,} coordinates from OSGB36 → WGS84")
+    else:
+        logger.warning("No valid OSGB36 coordinates found for conversion")
+
+    return df
+
+
+def _map_status(raw: str) -> str:
+    """Map a raw REPD status string to a canonical value."""
+    if not raw or not isinstance(raw, str):
+        return "unknown"
+    raw_lower = raw.lower().strip()
+    # Exact match
+    if raw_lower in STATUS_MAP:
+        return STATUS_MAP[raw_lower]
+    # Partial match
+    for key, value in STATUS_MAP.items():
+        if key in raw_lower:
+            return value
+    return "unknown"
+
+
+def fetch_repd(force: bool = False) -> Path:
+    """Download the latest REPD CSV."""
     raw_path = _out("repd_raw.csv")
-    if raw_path.exists() and not force:
+    if raw_path.exists() and raw_path.stat().st_size > 1000 and not force:
         logger.info(f"REPD already downloaded: {raw_path}")
         return raw_path
 
-    logger.info("Fetching REPD CSV from data.gov.uk...")
+    logger.info("Fetching REPD CSV...")
     with RateLimitedClient(rps=0.5, timeout=120) as client:
-        # Try CKAN API discovery first
         url = _discover_repd_url(client)
-
-        # Fall back to known URLs
-        urls_to_try = ([url] if url else []) + REPD_URLS
-        last_exc: Exception | None = None
+        urls_to_try = ([url] if url else []) + REPD_FALLBACK_URLS
 
         for try_url in urls_to_try:
             try:
                 logger.info(f"Trying: {try_url}")
                 response = client.get(try_url)
-                content_type = response.headers.get("content-type", "")
-                # Verify it looks like CSV (not HTML redirect)
                 text = response.text
-                if len(text) > 1000 and ("Site Name" in text or "Technology Type" in text or ",," in text):
+                # Validate: CSV should have common REPD headers
+                if len(text) > 5000 and any(
+                    h in text for h in ("Site Name", "Technology Type", "Ref ID")
+                ):
                     raw_path.write_text(text, encoding="utf-8")
-                    logger.success(f"Downloaded REPD ({len(text):,} chars) → {raw_path}")
+                    lines = text.count("\n")
+                    logger.success(f"Downloaded REPD ({lines:,} rows) → {raw_path}")
                     return raw_path
-                else:
-                    logger.warning(f"Response from {try_url} doesn't look like REPD CSV")
+                logger.warning(f"Response from {try_url} doesn't look like REPD CSV")
             except Exception as exc:
-                last_exc = exc
                 logger.warning(f"Failed {try_url}: {exc}")
-                continue
 
-        # If all fail, save a placeholder
-        logger.error(f"Could not download REPD CSV. Last error: {last_exc}")
-        raw_path.write_text("# REPD download failed - run again or download manually\n")
+        logger.error("Could not download REPD CSV from any source")
+        raw_path.write_text("# REPD download failed\n")
 
     return raw_path
 
 
 def parse_repd(raw_path: Path | None = None) -> pd.DataFrame:
     """
-    Parse the raw REPD CSV into a clean DataFrame.
+    Parse raw REPD CSV → standardised DataFrame with WGS84 coordinates.
 
-    Standardises column names, maps fuel types, handles encoding issues.
+    Handles:
+      - Multiple CSV encodings
+      - Variable column naming across REPD versions
+      - OSGB36 → WGS84 coordinate conversion
+      - Status normalisation
     """
     if raw_path is None:
         raw_path = _out("repd_raw.csv")
-
-    if not raw_path.exists():
-        logger.warning("REPD raw file not found, fetching...")
-        fetch_repd()
+    if not raw_path.exists() or raw_path.stat().st_size < 1000:
+        logger.warning("No valid REPD raw file, fetching...")
+        fetch_repd(force=True)
 
     logger.info(f"Parsing REPD from {raw_path}...")
 
@@ -142,72 +230,79 @@ def parse_repd(raw_path: Path | None = None) -> pd.DataFrame:
 
     logger.info(f"Loaded {len(df)} rows, {len(df.columns)} columns")
 
-    # Normalise column names: strip, lowercase, replace spaces/special with _
+    # Normalise column names
     df.columns = pd.Index([
         re.sub(r"[^a-z0-9]+", "_", c.strip().lower()).strip("_")
         for c in df.columns
     ])
 
-    # Standard column mapping (REPD column names vary between versions)
-    col_map: dict[str, str] = {
+    # Find coordinate columns (names vary between REPD versions)
+    easting_col = next(
+        (c for c in df.columns if "x_coord" in c or c == "easting"),
+        None,
+    )
+    northing_col = next(
+        (c for c in df.columns if "y_coord" in c or c == "northing"),
+        None,
+    )
+
+    # Convert OSGB36 → WGS84
+    if easting_col and northing_col:
+        df = _convert_osgb36_to_wgs84(df, easting_col, northing_col)
+    else:
+        logger.warning(f"No coordinate columns found (have: {list(df.columns)[:10]})")
+        df["lat"] = np.nan
+        df["lon"] = np.nan
+
+    # Map status
+    status_col = next(
+        (c for c in df.columns if c in ("development_status", "status")),
+        None,
+    )
+    dev_short_col = next(
+        (c for c in df.columns if "development_status_short" in c),
+        None,
+    )
+
+    if status_col:
+        df["status"] = df[status_col].apply(_map_status)
+    elif dev_short_col:
+        df["status"] = df[dev_short_col].apply(_map_status)
+    else:
+        df["status"] = "unknown"
+
+    # Rename key columns
+    rename_map = {
+        "ref_id": "repd_id",
         "site_name": "name",
         "technology_type": "technology",
         "installed_capacity_mwelec": "capacity_mw",
-        "x_co_ord": "easting",
-        "y_co_ord": "northing",
-        "latitude": "lat",
-        "longitude": "lon",
-        "development_status": "status",
         "operator_or_applicant": "developer",
-        "local_planning_authority": "planning_authority",
         "region": "region",
-        "planning_application_submitted": "planning_submitted",
-        "under_construction": "under_construction",
-        "operational": "operational",
         "country": "country",
-        "ref_id": "repd_id",
     }
-    # Only rename columns that actually exist
-    rename = {k: v for k, v in col_map.items() if k in df.columns}
-    df = df.rename(columns=rename)
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
 
-    # Try to coerce capacity to numeric
     if "capacity_mw" in df.columns:
         df["capacity_mw"] = pd.to_numeric(df["capacity_mw"], errors="coerce")
-
-    # Normalise status
-    if "status" in df.columns:
-        status_map = {
-            "operational": "operational",
-            "under construction": "construction",
-            "awaiting construction": "consented",
-            "planning permission expired": "planning",
-            "planning refused": "refused",
-            "application submitted": "planning",
-            "application withdrawn": "withdrawn",
-            "scoping stage": "planning",
-            "pre-application stage": "planning",
-            "decommissioned": "decommissioned",
-        }
-        df["status"] = df["status"].str.lower().str.strip().map(
-            lambda x: next((v for k, v in status_map.items() if k in str(x).lower()), "unknown")
-        )
 
     # Save processed
     out_path = PROCESSED_DIR / "repd_processed.csv"
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_path, index=False)
-    logger.success(f"Saved processed REPD ({len(df)} rows) → {out_path}")
+
+    with_coords = df["lat"].notna().sum()
+    logger.success(
+        f"Processed REPD: {len(df)} projects, {with_coords} with coordinates → {out_path}"
+    )
     return df
 
 
 def ingest_all(force: bool = False) -> pd.DataFrame:
-    """Run REPD ingestion and parsing."""
+    """Run REPD ingestion pipeline."""
     logger.info("=== REPD Ingestion ===")
     fetch_repd(force=force)
-    df = parse_repd()
-    logger.success("REPD ingestion complete")
-    return df
+    return parse_repd()
 
 
 if __name__ == "__main__":
