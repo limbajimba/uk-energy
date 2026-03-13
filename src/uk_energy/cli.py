@@ -303,6 +303,57 @@ def dashboard(host: str, port: int, debug: bool) -> None:
     run_dashboard(host=host, port=port, debug=debug)
 
 
+# ─── Time-Series Ingestion ────────────────────────────────────────────────────
+
+@cli.command("ts-ingest")
+@click.option("--stats", is_flag=True, help="Show storage stats only")
+def ts_ingest(stats: bool) -> None:
+    """Fetch all BMRS data and store in DuckDB."""
+    from uk_energy.timeseries.store import TimeSeriesStore
+
+    store = TimeSeriesStore()
+
+    if stats:
+        df = store.table_stats()
+        click.echo("\n  DuckDB Time-Series Store")
+        click.echo("  " + "─" * 55)
+        for _, row in df.iterrows():
+            if row["rows"] > 0:
+                click.echo(
+                    f"  {row['table']:<20} {row['rows']:>8,} rows  "
+                    f"{str(row['earliest'])[:19]} → {str(row['latest'])[:19]}"
+                )
+            else:
+                click.echo(f"  {row['table']:<20}        0 rows")
+        click.echo()
+        store.close()
+        return
+
+    from uk_energy.timeseries.ingest import ingest_all
+    results = ingest_all(store)
+    click.echo("\n  Ingestion Results")
+    click.echo("  " + "─" * 40)
+    for table, count in results.items():
+        click.echo(f"  {table:<20} {count:>6} new rows")
+    click.echo()
+    store.close()
+
+
+@cli.command("ts-backfill")
+@click.option("--days", default=30, type=int, help="Days to backfill")
+@click.option("--prices/--no-prices", default=True, help="Backfill system prices")
+def ts_backfill(days: int, prices: bool) -> None:
+    """Backfill historical data into DuckDB."""
+    from uk_energy.timeseries.store import TimeSeriesStore
+    from uk_energy.timeseries.ingest import backfill_prices
+
+    store = TimeSeriesStore()
+    if prices:
+        n = backfill_prices(store, days=days)
+        click.echo(f"  Backfilled {n} price records over {days} days")
+    store.close()
+
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
