@@ -290,6 +290,19 @@ def stats_cmd(ctx: click.Context) -> None:
     click.echo("\n" + "=" * 60 + "\n")
 
 
+# ─── Dashboard ────────────────────────────────────────────────────────────────
+
+@cli.command()
+@click.option("--host", default="127.0.0.1", help="Host to bind to")
+@click.option("--port", default=8050, type=int, help="Port to serve on")
+@click.option("--debug/--no-debug", default=True, help="Enable debug mode")
+def dashboard(host: str, port: int, debug: bool) -> None:
+    """Launch the interactive dashboard."""
+    from uk_energy.dashboard.app import main as run_dashboard
+    click.echo(f"🚀 Starting dashboard at http://{host}:{port}")
+    run_dashboard(host=host, port=port, debug=debug)
+
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
