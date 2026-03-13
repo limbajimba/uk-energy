@@ -2,13 +2,18 @@
 data.py — Dashboard data layer.
 
 Combines:
-  - Static: DUKES asset register (plants, installed capacity)
-  - BMRS: half-hourly MW generation, demand, prices, interconnector flows
-  - Carbon Intensity API: solar %, regional mix, carbon intensity
+  - Static: DUKES-verified asset register (plants, installed capacity)
+  - BMRS: half-hourly generation, demand, system prices, IC flows
+  - Carbon Intensity API: solar %, regional mix, gCO₂/kWh
 
-Key design: BMRS gives MW but no solar/battery. Carbon Intensity gives
-percentages including solar. We combine them: multiply CI percentages
-by BMRS total domestic generation to estimate solar MW.
+Data accuracy notes:
+  - BMRS generation is transmission-metered only (~70% of actual generation).
+    Embedded solar, small wind, CHP are invisible.
+  - BMRS "OTHER" ≈ pumped storage gen + embedded gen. Not decomposable.
+  - System prices (SSP/SBP) are imbalance settlement prices, NOT day-ahead.
+  - IC flows from generation summary are import-only. We use the dedicated
+    IC endpoint which has bidirectional data (+import, -export).
+  - Carbon Intensity API percentages are modelled estimates, not metered.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ import functools
 import json
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
 from loguru import logger
@@ -26,41 +32,44 @@ from uk_energy.config import PLANTS_UNIFIED, INTERCONNECTORS_REF, PROCESSED_DIR,
 
 @dataclass
 class StaticData:
-    """Static asset register."""
+    """Static asset register from DUKES + reconciliation."""
     plants: pd.DataFrame
     operational: pd.DataFrame
     interconnectors: list[dict]
 
-    # Pre-aggregated
-    fuel_capacity: dict[str, float]  # fuel → installed MW
+    fuel_capacity: dict[str, float]  # fuel → installed MW (DUKES-verified only)
     regional_capacity: dict[str, float]  # region → installed MW
     total_installed_mw: float = 0.0
 
-    # Data source inventory
     sources: list[dict] = field(default_factory=list)
 
 
 @dataclass
 class LiveData:
-    """Live data from BMRS + Carbon Intensity."""
-    # Raw
-    generation: pd.DataFrame
+    """Live data from BMRS + Carbon Intensity API."""
+    # Raw DataFrames
+    generation: pd.DataFrame  # Domestic gen by fuel (excludes IC rows)
     demand: pd.DataFrame
-    prices: pd.DataFrame
-    ic_flows: pd.DataFrame
-    ci_mix: dict[str, float]  # Carbon Intensity current mix {fuel: %}
-    ci_regional: pd.DataFrame
-    carbon_intensity: dict  # {forecast, actual, index}
+    prices: pd.DataFrame  # SSP/SBP system prices
+    ic_flows: pd.DataFrame  # Bidirectional IC flows from dedicated endpoint
+    ci_mix: dict[str, float]  # {fuel: pct} from Carbon Intensity
+    ci_regional: pd.DataFrame  # Regional mix (14 DNO regions only, no aggregates)
+    carbon_intensity: dict  # {forecast_gco2, actual_gco2, index}
 
     fetch_time: datetime = field(default_factory=datetime.utcnow)
     n_periods: int = 0
 
-    # Derived (computed from BMRS + CI)
-    current_gen: dict[str, float] = field(default_factory=dict)  # fuel → MW (corrected)
+    # Derived from latest period
+    current_gen: dict[str, float] = field(default_factory=dict)  # fuel → MW (domestic only)
+    current_ic: dict[str, float] = field(default_factory=dict)  # ic_name → MW (signed)
     total_domestic_mw: float = 0.0
     total_import_mw: float = 0.0
+    total_export_mw: float = 0.0
+    net_ic_mw: float = 0.0  # positive = net import
     demand_mw: float = 0.0
-    price_gbp_mwh: float = 0.0
+    ssp_gbp_mwh: float = 0.0  # System Sell Price
+    sbp_gbp_mwh: float = 0.0  # System Buy Price
+    niv_mw: float = 0.0  # Net Imbalance Volume
     wind_pct: float = 0.0
     solar_mw: float = 0.0
     carbon_gco2: float = 0.0
@@ -68,15 +77,12 @@ class LiveData:
 
 def _inventory_sources() -> list[dict]:
     """Check what data files exist and their freshness."""
-    import os
-
     sources = []
-
     checks = [
         ("DUKES (DESNZ)", PROCESSED_DIR / "dukes_processed.csv"),
         ("WRI Global Power", PROCESSED_DIR / "wri_gb_plants.csv"),
         ("REPD (Renewables)", PROCESSED_DIR / "repd_processed.csv"),
-        ("OSUKED Dictionary", PROCESSED_DIR / "osuked_dictionary.csv" if (PROCESSED_DIR / "osuked_dictionary.csv").exists() else RAW_DIR / "osuked" / "ids.csv"),
+        ("OSUKED Dictionary", RAW_DIR / "osuked" / "ids.csv"),
         ("BMRS BM Units", RAW_DIR / "bmrs" / "bm_units_all.json"),
         ("OSM Substations", RAW_DIR / "osm" / "substations.json"),
         ("Plants Unified", PLANTS_UNIFIED),
@@ -114,21 +120,15 @@ def _inventory_sources() -> list[dict]:
                     pass
 
             sources.append({
-                "name": name,
-                "path": str(path.name),
-                "size_mb": round(size_mb, 1),
-                "rows": rows,
+                "name": name, "path": str(path.name),
+                "size_mb": round(size_mb, 1), "rows": rows,
                 "age_days": age_days,
                 "status": "fresh" if age_days < 7 else "stale" if age_days < 30 else "old",
             })
         else:
             sources.append({
-                "name": name,
-                "path": str(path.name),
-                "size_mb": 0,
-                "rows": "—",
-                "age_days": -1,
-                "status": "missing",
+                "name": name, "path": str(path.name),
+                "size_mb": 0, "rows": "—", "age_days": -1, "status": "missing",
             })
 
     return sources
@@ -136,7 +136,7 @@ def _inventory_sources() -> list[dict]:
 
 @functools.lru_cache(maxsize=1)
 def load_data() -> StaticData:
-    """Load static asset data (cached)."""
+    """Load static asset data (cached for app lifetime)."""
     plants = pd.read_parquet(PLANTS_UNIFIED) if PLANTS_UNIFIED.exists() else pd.DataFrame()
     op = plants[plants["status"] == "operational"].copy()
     dukes = op[op["source_dukes"] == True].copy()
@@ -148,21 +148,16 @@ def load_data() -> StaticData:
     fuel_cap = dukes.groupby("fuel_type")["capacity_mw"].sum().to_dict()
     regional_cap = dukes.groupby("dno_region")["capacity_mw"].sum().to_dict()
 
-    sources = _inventory_sources()
-
     return StaticData(
-        plants=plants,
-        operational=dukes,
-        interconnectors=ics,
-        fuel_capacity=fuel_cap,
-        regional_capacity=regional_cap,
+        plants=plants, operational=dukes, interconnectors=ics,
+        fuel_capacity=fuel_cap, regional_capacity=regional_cap,
         total_installed_mw=dukes["capacity_mw"].sum(),
-        sources=sources,
+        sources=_inventory_sources(),
     )
 
 
 def load_live_data() -> LiveData:
-    """Fetch latest from BMRS + Carbon Intensity."""
+    """Fetch latest from BMRS + Carbon Intensity. Each source independent."""
     from uk_energy.timeseries.bmrs_live import fetch_all
     from uk_energy.timeseries.carbon_intensity import (
         fetch_current_mix,
@@ -173,85 +168,124 @@ def load_live_data() -> LiveData:
     today = date.today()
     yesterday = today - timedelta(days=1)
 
-    # BMRS
-    try:
-        raw = fetch_all(from_date=yesterday, to_date=today)
-    except Exception as e:
-        logger.error(f"BMRS fetch failed: {e}")
-        raw = {"generation": pd.DataFrame(), "demand": pd.DataFrame(),
-               "prices": pd.DataFrame(), "interconnectors": pd.DataFrame()}
+    # BMRS — each endpoint fetched independently (one failure doesn't block others)
+    raw = fetch_all(from_date=yesterday, to_date=today)
+    gen = raw.get("generation", pd.DataFrame())
+    demand = raw.get("demand", pd.DataFrame())
+    prices = raw.get("prices", pd.DataFrame())
+    ic_flows = raw.get("interconnectors", pd.DataFrame())
 
-    gen = raw["generation"]
-    demand = raw["demand"]
-    prices = raw["prices"]
-    ic = raw["interconnectors"]
+    # Carbon Intensity — each call independent
+    ci_mix: dict[str, float] = {}
+    ci_regional = pd.DataFrame()
+    ci_intensity: dict = {"forecast_gco2": 0, "actual_gco2": None, "index": "unknown"}
 
-    # Carbon Intensity
     try:
         ci_mix = fetch_current_mix()
-        ci_regional = fetch_regional_mix()
+    except Exception as e:
+        logger.error(f"Carbon Intensity mix failed: {e}")
+
+    try:
+        ci_regional_raw = fetch_regional_mix()
+        # Filter to 14 actual DNO regions (IDs 1-14), exclude aggregates (15-18)
+        if not ci_regional_raw.empty and "region_id" in ci_regional_raw.columns:
+            ci_regional = ci_regional_raw[ci_regional_raw["region_id"] <= 14].copy()
+        else:
+            ci_regional = ci_regional_raw
+    except Exception as e:
+        logger.error(f"Carbon Intensity regional failed: {e}")
+
+    try:
         ci_intensity = fetch_intensity()
     except Exception as e:
-        logger.error(f"Carbon Intensity fetch failed: {e}")
-        ci_mix = {}
-        ci_regional = pd.DataFrame()
-        ci_intensity = {"forecast_gco2": 0, "actual_gco2": None, "index": "unknown"}
+        logger.error(f"Carbon Intensity intensity failed: {e}")
 
-    # ─── Derive current generation snapshot ───
-    # BMRS latest period
+    # ─── Derive current generation snapshot (DOMESTIC ONLY) ───
     current_gen: dict[str, float] = {}
     total_domestic = 0.0
-    total_import = 0.0
 
     if not gen.empty:
-        latest_ts = gen["timestamp"].max()
-        latest = gen[gen["timestamp"] == latest_ts]
-        for _, r in latest.iterrows():
-            ft = r["fuel_type"]
-            mw = r["generation_mw"]
-            current_gen[ft] = mw
-            if ft.startswith("ic_"):
-                total_import += max(0, mw)
-            else:
+        # Only domestic generation (not ICs from gen summary)
+        domestic_gen = gen[~gen["is_ic"]]
+        if not domestic_gen.empty:
+            latest_ts = domestic_gen["timestamp"].max()
+            latest = domestic_gen[domestic_gen["timestamp"] == latest_ts]
+            for _, r in latest.iterrows():
+                ft = r["fuel_type"]
+                mw = r["generation_mw"]
+                current_gen[ft] = mw
                 total_domestic += max(0, mw)
 
-    # Estimate solar MW from Carbon Intensity percentage
+    # ─── Derive IC snapshot from DEDICATED endpoint (bidirectional) ───
+    current_ic: dict[str, float] = {}
+    total_import = 0.0
+    total_export = 0.0
+
+    if not ic_flows.empty:
+        latest_ic_ts = ic_flows["timestamp"].max()
+        latest_ics = ic_flows[ic_flows["timestamp"] == latest_ic_ts]
+        for _, r in latest_ics.iterrows():
+            name = r["ic_name"]
+            flow = r["flow_mw"]
+            current_ic[name] = flow
+            if flow > 0:
+                total_import += flow
+            else:
+                total_export += abs(flow)
+
+    net_ic = total_import - total_export
+
+    # ─── Solar MW estimate from Carbon Intensity ───
     solar_pct = ci_mix.get("solar", 0)
-    # CI percentages include imports in the total. Domestic gen only:
-    # total_with_imports = total_domestic + total_import
-    # But CI "solar" is % of total including imports
-    total_with_imports = total_domestic + total_import
-    solar_mw = total_with_imports * solar_pct / 100 if solar_pct > 0 else 0.0
+    # CI percentages cover all generation including embedded + imports
+    # Rough estimate: solar_mw ≈ (total_domestic + net_ic) × solar_pct / 100
+    total_supply = total_domestic + net_ic
+    solar_mw = total_supply * solar_pct / 100 if solar_pct > 0 else 0.0
     current_gen["solar"] = solar_mw
 
-    # Wind share
+    # ─── Wind share ───
     wind_mw = current_gen.get("wind", 0)
     wind_pct = (wind_mw / total_domestic * 100) if total_domestic > 0 else 0
 
-    # Latest demand
+    # ─── Latest demand (INDO) ───
     demand_mw = demand.iloc[-1].get("demand_mw", 0) if not demand.empty else 0
 
-    # Latest price
-    price = prices.iloc[-1].get("price_gbp_mwh", 0) if not prices.empty else 0
+    # ─── Latest system prices ───
+    ssp = 0.0
+    sbp = 0.0
+    niv = 0.0
+    if not prices.empty:
+        latest_price = prices.iloc[-1]
+        ssp = latest_price.get("ssp_gbp_mwh", 0)
+        sbp = latest_price.get("sbp_gbp_mwh", 0)
+        niv = latest_price.get("niv_mw", 0)
 
-    # Carbon intensity
+    # ─── Carbon intensity ───
     carbon = ci_intensity.get("actual_gco2") or ci_intensity.get("forecast_gco2", 0)
 
+    # Separate domestic gen from IC gen for the generation DataFrame
+    gen_domestic = gen[~gen["is_ic"]].copy() if not gen.empty else pd.DataFrame()
+
     return LiveData(
-        generation=gen,
+        generation=gen_domestic,
         demand=demand,
         prices=prices,
-        ic_flows=ic,
+        ic_flows=ic_flows,
         ci_mix=ci_mix,
         ci_regional=ci_regional,
         carbon_intensity=ci_intensity,
         fetch_time=datetime.utcnow(),
         n_periods=gen["timestamp"].nunique() if not gen.empty else 0,
         current_gen=current_gen,
+        current_ic=current_ic,
         total_domestic_mw=total_domestic,
         total_import_mw=total_import,
+        total_export_mw=total_export,
+        net_ic_mw=net_ic,
         demand_mw=demand_mw,
-        price_gbp_mwh=price,
+        ssp_gbp_mwh=ssp,
+        sbp_gbp_mwh=sbp,
+        niv_mw=niv,
         wind_pct=wind_pct,
         solar_mw=solar_mw,
         carbon_gco2=carbon,
